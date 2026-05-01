@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+import time
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -95,13 +97,26 @@ def run_pipeline(stages: list[str], config: ConfigLoader, engine) -> None:
 
         logger.info(f"=== Running stage: {name} ===")
         stage = cls(config=config, engine=engine)
+        stage_started = time.monotonic()
         try:
             result = stage.run()
         except Exception as exc:
             result = StageResult(success=False, errors=[str(exc)])
             logger.exception(f"Stage '{name}' raised an unexpected exception.")
+        duration_s = round(time.monotonic() - stage_started, 3)
+        result.metadata = {**result.metadata, 'duration_s': duration_s}
 
         results[name] = result
+        logger.info(json.dumps({
+            'event': 'stage_complete',
+            'run_id': run_id,
+            'stage': name,
+            'success': result.success,
+            'rows_written': result.rows_written,
+            'errors': len(result.errors),
+            'warnings': len(result.warnings),
+            'duration_s': duration_s,
+        }))
         if not result.success:
             failed.add(name)
             for err in result.errors:

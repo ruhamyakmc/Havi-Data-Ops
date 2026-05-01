@@ -1,4 +1,5 @@
 import pytest
+import json
 from havi import topological_sort, build_run_list
 
 _STAGE_DEPS = {
@@ -114,3 +115,25 @@ def test_run_pipeline_calls_notifier_on_success():
             run_pipeline(['sqlite_to_bronze'], config, engine)
 
     mock_notify.assert_called_once()
+
+
+def test_run_pipeline_logs_structured_stage_complete(caplog):
+    config = MagicMock()
+    engine = MagicMock()
+
+    with patch.object(STAGE_CLASSES['sqlite_to_bronze'], 'run',
+                      return_value=StageResult(success=True, rows_written=10)):
+        with patch('havi.send_pipeline_report'):
+            with caplog.at_level('INFO'):
+                run_pipeline(['sqlite_to_bronze'], config, engine)
+
+    events = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.message.startswith('{')
+    ]
+    stage_event = next(e for e in events if e.get('event') == 'stage_complete')
+    assert stage_event['stage'] == 'sqlite_to_bronze'
+    assert stage_event['success'] is True
+    assert stage_event['rows_written'] == 10
+    assert 'duration_s' in stage_event

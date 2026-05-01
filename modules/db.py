@@ -104,12 +104,15 @@ def log_pipeline_run(
     for name in stages:
         result = stage_results.get(name)
         if result is None:
-            rows.append((run_id, started_at, finished_at, name, False, 0, 'skipped'))
+            rows.append((
+                run_id, started_at, finished_at, name, False, 0, 'skipped', None,
+            ))
         else:
             error_text = '; '.join(result.errors) if result.errors else None
+            duration_s = result.metadata.get('duration_s')
             rows.append((
                 run_id, started_at, finished_at,
-                name, result.success, result.rows_written, error_text,
+                name, result.success, result.rows_written, error_text, duration_s,
             ))
 
     try:
@@ -122,15 +125,26 @@ def log_pipeline_run(
                     stage        TEXT        NOT NULL,
                     success      BOOLEAN     NOT NULL,
                     rows_written INTEGER     NOT NULL DEFAULT 0,
-                    error_text   TEXT
+                    error_text   TEXT,
+                    duration_s   DOUBLE PRECISION
                 )
             """))
+            conn.execute(text(
+                'ALTER TABLE havi.pipeline_run_log '
+                'ADD COLUMN IF NOT EXISTS duration_s DOUBLE PRECISION'
+            ))
             conn.execute(
                 text("""
                     INSERT INTO havi.pipeline_run_log
-                        (run_id, started_at, finished_at, stage, success, rows_written, error_text)
+                        (
+                            run_id, started_at, finished_at, stage, success,
+                            rows_written, error_text, duration_s
+                        )
                     VALUES
-                        (:run_id, :started_at, :finished_at, :stage, :success, :rows_written, :error_text)
+                        (
+                            :run_id, :started_at, :finished_at, :stage, :success,
+                            :rows_written, :error_text, :duration_s
+                        )
                 """),
                 [
                     {
@@ -141,8 +155,12 @@ def log_pipeline_run(
                         'success': success,
                         'rows_written': rows_written,
                         'error_text': error_text,
+                        'duration_s': duration_s,
                     }
-                    for run_id, started_at, finished_at, stage, success, rows_written, error_text
+                    for (
+                        run_id, started_at, finished_at, stage, success,
+                        rows_written, error_text, duration_s,
+                    )
                     in rows
                 ],
             )

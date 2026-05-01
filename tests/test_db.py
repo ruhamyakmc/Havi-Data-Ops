@@ -1,12 +1,15 @@
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch, call
 from modules.db import (
     create_db_engine,
     create_table_indexes,
     init_schemas,
+    log_pipeline_run,
     log_pipeline_row_counts,
     SCHEMAS,
 )
+from stages.base import StageResult
 
 def test_init_schemas_creates_all_schemas():
     mock_conn = MagicMock()
@@ -108,6 +111,31 @@ def test_log_pipeline_row_counts_warns_on_mismatch(caplog):
         log_pipeline_row_counts(mock_engine, 'run-1', tables=['ento_collection'])
 
     assert 'Layer row-count mismatch for ento_collection' in caplog.text
+
+
+def test_log_pipeline_run_writes_stage_duration():
+    mock_conn = MagicMock()
+    mock_engine = MagicMock()
+    mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+
+    result = StageResult(success=True, rows_written=3, metadata={'duration_s': 1.25})
+
+    log_pipeline_run(
+        mock_engine,
+        'run-1',
+        datetime.now(timezone.utc),
+        {'sqlite_to_bronze': result},
+        ['sqlite_to_bronze'],
+    )
+
+    executed_sql = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+    assert any('ADD COLUMN IF NOT EXISTS duration_s' in sql for sql in executed_sql)
+    insert_call = next(
+        c for c in mock_conn.execute.call_args_list
+        if 'INSERT INTO havi.pipeline_run_log' in str(c.args[0])
+    )
+    assert insert_call.args[1][0]['duration_s'] == 1.25
 
 
 def test_create_table_indexes_creates_configured_indexes():

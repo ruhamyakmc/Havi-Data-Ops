@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, URL
 
-from modules.havi_schema import FORM_COLUMNS, INDEX_COLUMNS, primary_key_columns
+from modules.havi_schema import (
+    FORM_COLUMNS,
+    INDEX_COLUMNS,
+    column_definitions,
+    primary_key_columns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,33 @@ def create_table_indexes(conn, schema: str, table: str) -> None:
             f'CREATE INDEX IF NOT EXISTS {quote_identifier(index_name)} '
             f'ON {quote_identifier(schema)}.{quote_identifier(table)} ({quoted_columns})'
         ))
+
+
+def replace_table_from_select(
+    conn,
+    schema: str,
+    table: str,
+    columns: list[str],
+    select_sql: str,
+) -> None:
+    """Atomically replace a table using explicit schema-registry column definitions."""
+    stage_table = f'_stage_{table}'
+    quoted_schema = quote_identifier(schema)
+    quoted_table = quote_identifier(table)
+    quoted_stage = quote_identifier(stage_table)
+    quoted_columns = ', '.join(quote_identifier(col) for col in columns)
+
+    conn.execute(text(f'DROP TABLE IF EXISTS {quoted_schema}.{quoted_stage}'))
+    conn.execute(text(
+        f'CREATE TABLE {quoted_schema}.{quoted_stage} ({column_definitions(columns)})'
+    ))
+    conn.execute(text(
+        f'INSERT INTO {quoted_schema}.{quoted_stage} ({quoted_columns}) {select_sql}'
+    ))
+    conn.execute(text(f'DROP TABLE IF EXISTS {quoted_schema}.{quoted_table}'))
+    conn.execute(text(
+        f'ALTER TABLE {quoted_schema}.{quoted_stage} RENAME TO {quoted_table}'
+    ))
 
 
 def log_pipeline_run(

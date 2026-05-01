@@ -5,10 +5,11 @@ import logging
 import pandas as pd
 from sqlalchemy import text
 
-from modules.data_cleaner import DataCleaner
 from modules.db import create_table_indexes, has_table, quote_identifier
+from modules.data_cleaner import DataCleaner
 from modules.havi_schema import (
     FORM_COLUMNS,
+    column_definitions,
     primary_key_columns,
     silver_columns,
 )
@@ -21,12 +22,22 @@ logger = logging.getLogger(__name__)
 def _replace_table(conn, schema: str, table: str, df: pd.DataFrame) -> None:
     """Replace a table through a staging table inside the active transaction."""
     stage_table = f'_stage_{table}'
+    columns = list(df.columns)
+    conn.execute(text(
+        f'DROP TABLE IF EXISTS {quote_identifier(schema)}.{quote_identifier(stage_table)}'
+    ))
+    conn.execute(text(
+        f'CREATE TABLE {quote_identifier(schema)}.{quote_identifier(stage_table)} '
+        f'({column_definitions(columns)})'
+    ))
     df.to_sql(
         stage_table,
         conn,
         schema=schema,
-        if_exists='replace',
+        if_exists='append',
         index=False,
+        method='multi',
+        chunksize=1000,
     )
     conn.execute(text(
         f'DROP TABLE IF EXISTS {quote_identifier(schema)}.{quote_identifier(table)}'

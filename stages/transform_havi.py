@@ -4,9 +4,7 @@ import logging
 import os
 from pathlib import Path
 
-from sqlalchemy import text
-
-from modules.db import create_table_indexes, has_table
+from modules.db import create_table_indexes, has_table, replace_table_from_select
 from modules.havi_schema import FORM_COLUMNS, ensure_empty_table, silver_columns
 from stages.base import BaseStage, StageResult
 
@@ -51,7 +49,13 @@ class TransformHavi(BaseStage):
                     )
                 sql = sql_path.read_text()
                 try:
-                    conn.execute(text(sql))
+                    replace_table_from_select(
+                        conn,
+                        schema='gold_havi',
+                        table=source_table,
+                        columns=silver_columns(source_table),
+                        select_sql=sql,
+                    )
                     create_table_indexes(conn, 'gold_havi', source_table)
                     logger.info(f"Executed: {sql_path.name}")
                 except Exception as exc:

@@ -7,6 +7,7 @@ from modules.db import (
     init_schemas,
     log_pipeline_run,
     log_pipeline_row_counts,
+    replace_table_from_select,
     SCHEMAS,
 )
 from stages.base import StageResult
@@ -172,3 +173,29 @@ def test_create_table_indexes_ignores_unmodeled_tables():
     create_table_indexes(mock_conn, 'havi', 'ds_validation_report')
 
     mock_conn.execute.assert_not_called()
+
+
+def test_replace_table_from_select_uses_explicit_column_definitions():
+    mock_conn = MagicMock()
+
+    replace_table_from_select(
+        mock_conn,
+        'gold_havi',
+        'ento_collection',
+        ['uniqueid', 'extracted_at'],
+        'SELECT uniqueid, extracted_at FROM silver_havi.ento_collection',
+    )
+
+    executed_sql = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+    assert any(
+        'CREATE TABLE "gold_havi"."_stage_ento_collection" '
+        '("uniqueid" TEXT, "extracted_at" TIMESTAMPTZ)' in sql
+        for sql in executed_sql
+    )
+    assert any(
+        'INSERT INTO "gold_havi"."_stage_ento_collection" '
+        '("uniqueid", "extracted_at") SELECT uniqueid, extracted_at' in sql
+        for sql in executed_sql
+    )
+    assert any('DROP TABLE IF EXISTS "gold_havi"."ento_collection"' in sql
+               for sql in executed_sql)

@@ -4,6 +4,4 @@
 -- (type casting, computed columns, derived fields). For now the table is an
 -- exact copy of silver so that promote_havi can swap it into the stable havi
 -- schema without coupling directly to silver. Add transforms here as needed.
-DROP TABLE IF EXISTS gold_havi.pheno_assay;
-CREATE TABLE gold_havi.pheno_assay AS
 SELECT * FROM silver_havi.pheno_assay;

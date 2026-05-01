@@ -147,6 +147,10 @@ PRIMARY_KEYS: dict[str, list[str]] = {
 
 DEFAULT_PRIMARY_KEY = ['uniqueid']
 
+COLUMN_TYPES: dict[str, str] = {
+    'extracted_at': 'TIMESTAMPTZ',
+}
+
 INDEX_COLUMNS: dict[str, list[list[str]]] = {
     'ento_collection': [
         ['uniqueid', 'clocation'],
@@ -189,8 +193,19 @@ def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def column_type(column: str) -> str:
+    return COLUMN_TYPES.get(column, 'TEXT')
+
+
+def column_definitions(columns: list[str]) -> str:
+    return ', '.join(
+        f'{_quote_identifier(col)} {column_type(col)}'
+        for col in columns
+    )
+
+
 def ensure_empty_table(conn, schema: str, table: str, columns: list[str]) -> None:
-    quoted_columns = ', '.join(f'{_quote_identifier(col)} TEXT' for col in columns)
+    quoted_columns = column_definitions(columns)
     conn.execute(text(
         f'CREATE TABLE IF NOT EXISTS {_quote_identifier(schema)}.{_quote_identifier(table)} '
         f'({quoted_columns})'

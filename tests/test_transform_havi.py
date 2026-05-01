@@ -13,7 +13,7 @@ def test_load_sql_files_returns_sorted_paths(tmp_path):
 
 
 def test_transform_havi_executes_all_sql_files(tmp_path):
-    (tmp_path / 'ento_collection.sql').write_text('CREATE TABLE gold_havi.ento_collection AS SELECT 1')
+    (tmp_path / 'ento_collection.sql').write_text('SELECT * FROM silver_havi.ento_collection')
 
     engine = MagicMock()
     mock_conn = MagicMock()
@@ -34,7 +34,7 @@ def test_transform_havi_executes_all_sql_files(tmp_path):
 
 
 def test_transform_havi_raises_on_sql_error(tmp_path):
-    (tmp_path / 'bad.sql').write_text('NOT VALID SQL')
+    (tmp_path / 'ento_collection.sql').write_text('NOT VALID SQL')
 
     engine = MagicMock()
     mock_conn = MagicMock()
@@ -46,5 +46,6 @@ def test_transform_havi_raises_on_sql_error(tmp_path):
     stage = TransformHavi(config=config, engine=engine)
 
     with patch('stages.transform_havi.SQL_TRANSFORM_DIR', str(tmp_path)):
-        with pytest.raises(Exception, match="SQL syntax error"):
-            stage.run()
+        with patch('stages.transform_havi.has_table', return_value=True):
+            with pytest.raises(Exception, match="SQL syntax error"):
+                stage.run()

@@ -5,7 +5,8 @@ import re
 
 from sqlalchemy import text
 
-from modules.db import create_table_indexes
+from modules.db import create_table_indexes, replace_table_from_select
+from modules.havi_schema import FORM_COLUMNS, silver_columns
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -62,10 +63,19 @@ class PromoteHavi(BaseStage):
                     """), {"table": table}).fetchall()
 
                     conn.execute(text(f'DROP TABLE IF EXISTS havi."{new_table}"'))
-                    conn.execute(text(
-                        f'CREATE TABLE havi."{new_table}" AS '
-                        f'SELECT * FROM gold_havi."{table}"'
-                    ))
+                    if table in FORM_COLUMNS:
+                        replace_table_from_select(
+                            conn,
+                            schema='havi',
+                            table=new_table,
+                            columns=silver_columns(table),
+                            select_sql=f'SELECT * FROM gold_havi."{table}"',
+                        )
+                    else:
+                        conn.execute(text(
+                            f'CREATE TABLE havi."{new_table}" AS '
+                            f'SELECT * FROM gold_havi."{table}"'
+                        ))
                     conn.execute(text(
                         f'ALTER TABLE IF EXISTS havi."{table}" '
                         f'RENAME TO "{old_table}"'

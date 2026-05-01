@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, URL
 
-from modules.havi_schema import FORM_COLUMNS, INDEX_COLUMNS
+from modules.havi_schema import FORM_COLUMNS, INDEX_COLUMNS, primary_key_columns
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +58,26 @@ def has_table(engine: Engine, table: str, schema: str) -> bool:
 
 
 def create_table_indexes(conn, schema: str, table: str) -> None:
-    """Create standard non-unique indexes for a modeled HAVI table."""
+    """Create standard uniqueness and lookup indexes for a modeled HAVI table."""
+    if table not in FORM_COLUMNS:
+        return
+
+    key_columns = primary_key_columns(table)
+    suffix = '_'.join(key_columns)
+    unique_index_name = f'uidx_{table}_{suffix}'
+    quoted_key_columns = ', '.join(quote_identifier(col) for col in key_columns)
+    not_null_filter = ' AND '.join(
+        f'{quote_identifier(col)} IS NOT NULL' for col in key_columns
+    )
+    conn.execute(text(
+        f'CREATE UNIQUE INDEX IF NOT EXISTS {quote_identifier(unique_index_name)} '
+        f'ON {quote_identifier(schema)}.{quote_identifier(table)} ({quoted_key_columns}) '
+        f'WHERE {not_null_filter}'
+    ))
+
     for columns in INDEX_COLUMNS.get(table, []):
+        if columns == key_columns:
+            continue
         suffix = '_'.join(columns)
         index_name = f'idx_{table}_{suffix}'
         quoted_columns = ', '.join(quote_identifier(col) for col in columns)

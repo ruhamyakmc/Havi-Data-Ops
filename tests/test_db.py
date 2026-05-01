@@ -116,11 +116,26 @@ def test_create_table_indexes_creates_configured_indexes():
     create_table_indexes(mock_conn, 'silver_havi', 'ento_collection')
 
     executed_sql = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
-    assert any('CREATE INDEX IF NOT EXISTS "idx_ento_collection_uniqueid_clocation"' in sql
+    assert any('CREATE UNIQUE INDEX IF NOT EXISTS "uidx_ento_collection_uniqueid_clocation"'
+               in sql for sql in executed_sql)
+    assert any('WHERE "uniqueid" IS NOT NULL AND "clocation" IS NOT NULL' in sql
+               for sql in executed_sql)
+    assert not any('CREATE INDEX IF NOT EXISTS "idx_ento_collection_uniqueid_clocation"' in sql
                for sql in executed_sql)
     assert any('ON "silver_havi"."ento_collection" ("uniqueid", "clocation")' in sql
                for sql in executed_sql)
     assert any('"idx_ento_collection_run_uuid"' in sql for sql in executed_sql)
+
+
+def test_create_table_indexes_uses_default_uniqueid_key():
+    mock_conn = MagicMock()
+
+    create_table_indexes(mock_conn, 'gold_havi', 'ento_mosquito')
+
+    executed_sql = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+    assert any('CREATE UNIQUE INDEX IF NOT EXISTS "uidx_ento_mosquito_uniqueid"' in sql
+               for sql in executed_sql)
+    assert any('WHERE "uniqueid" IS NOT NULL' in sql for sql in executed_sql)
 
 
 def test_create_table_indexes_ignores_unmodeled_tables():

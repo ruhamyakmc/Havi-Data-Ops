@@ -142,9 +142,10 @@ def test_core_etl_runs_end_to_end_against_postgres(tmp_path, monkeypatch):
             assert result.success, result.errors
 
         with engine.connect() as conn:
-            promoted_count = conn.execute(
-                text('SELECT COUNT(*) FROM havi.ento_collection')
-            ).scalar_one()
+            promoted = conn.execute(text("""
+                SELECT COUNT(*) AS row_count, MAX(total_mosquito_count) AS total_count
+                FROM havi.ento_collection
+            """)).one()
             extracted_type = conn.execute(text("""
                 SELECT data_type
                 FROM information_schema.columns
@@ -152,9 +153,18 @@ def test_core_etl_runs_end_to_end_against_postgres(tmp_path, monkeypatch):
                   AND table_name = 'ento_collection'
                   AND column_name = 'extracted_at'
             """)).scalar_one()
+            total_count_type = conn.execute(text("""
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'havi'
+                  AND table_name = 'ento_collection'
+                  AND column_name = 'total_mosquito_count'
+            """)).scalar_one()
 
-        assert promoted_count == 1
+        assert promoted.row_count == 1
+        assert promoted.total_count == 1
         assert extracted_type == 'timestamp with time zone'
+        assert total_count_type == 'integer'
     finally:
         with engine.begin() as conn:
             for schema in reversed(SCHEMAS):

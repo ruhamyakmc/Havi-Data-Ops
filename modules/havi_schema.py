@@ -149,6 +149,45 @@ DEFAULT_PRIMARY_KEY = ['uniqueid']
 
 COLUMN_TYPES: dict[str, str] = {
     'extracted_at': 'TIMESTAMPTZ',
+    'collection_date': 'DATE',
+    'observation_date': 'DATE',
+    'assay_date': 'DATE',
+    'total_mosquito_count': 'INTEGER',
+    'mosquito_number': 'INTEGER',
+    'assay_count': 'INTEGER',
+    'num_tested': 'INTEGER',
+    'num_dead': 'INTEGER',
+    'num_knockdown': 'INTEGER',
+    'pct_mortality_value': 'DOUBLE PRECISION',
+    'pct_knockdown_value': 'DOUBLE PRECISION',
+    'sleeping_rooms_count': 'INTEGER',
+    'sleeping_areas_count': 'INTEGER',
+    'hanging_bednets_count': 'INTEGER',
+    'people_count': 'INTEGER',
+    'individual_number': 'INTEGER',
+    'age_years': 'DOUBLE PRECISION',
+}
+
+GOLD_DERIVED_COLUMNS: dict[str, list[str]] = {
+    'ento_collection': ['collection_date', 'total_mosquito_count'],
+    'ento_mosquito': ['collection_date', 'mosquito_number'],
+    'pheno_site': ['assay_date', 'assay_count'],
+    'pheno_assay': [
+        'assay_date',
+        'num_tested',
+        'num_dead',
+        'num_knockdown',
+        'pct_mortality_value',
+        'pct_knockdown_value',
+    ],
+    'hbo_household': [
+        'observation_date',
+        'sleeping_rooms_count',
+        'sleeping_areas_count',
+        'hanging_bednets_count',
+        'people_count',
+    ],
+    'hbo_person': ['observation_date', 'individual_number', 'age_years'],
 }
 
 INDEX_COLUMNS: dict[str, list[list[str]]] = {
@@ -218,6 +257,10 @@ def bronze_columns(table: str) -> list[str]:
 
 def silver_columns(table: str) -> list[str]:
     return FORM_COLUMNS[table] + SILVER_METADATA_COLUMNS
+
+
+def gold_columns(table: str) -> list[str]:
+    return silver_columns(table) + GOLD_DERIVED_COLUMNS.get(table, [])
 
 
 def primary_key_columns(table: str) -> list[str]:

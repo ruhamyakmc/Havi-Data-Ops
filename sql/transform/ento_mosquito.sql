@@ -1,7 +1,10 @@
 -- gold_havi.ento_mosquito
--- Intentional pass-through from silver_havi.
--- The gold layer is the designated place for future business-logic transforms
--- (type casting, computed columns, derived fields). For now the table is an
--- exact copy of silver so that promote_havi can swap it into the stable havi
--- schema without coupling directly to silver. Add transforms here as needed.
-SELECT * FROM silver_havi.ento_mosquito;
+-- Gold adds typed analytics fields while preserving raw CRF columns.
+SELECT
+    *,
+    CASE
+        WHEN dateofcollection ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+        THEN left(dateofcollection, 10)::date
+    END AS collection_date,
+    CASE WHEN mosqnum ~ '^-?[0-9]+$' THEN mosqnum::integer END AS mosquito_number
+FROM silver_havi.ento_mosquito;

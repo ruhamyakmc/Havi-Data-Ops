@@ -6,7 +6,7 @@ import re
 from sqlalchemy import text
 
 from modules.db import create_table_indexes, replace_table_from_select
-from modules.havi_schema import FORM_COLUMNS, silver_columns
+from modules.havi_schema import FORM_COLUMNS, gold_columns
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ class PromoteHavi(BaseStage):
                             conn,
                             schema='havi',
                             table=new_table,
-                            columns=silver_columns(table),
+                            columns=gold_columns(table),
                             select_sql=f'SELECT * FROM gold_havi."{table}"',
                         )
                     else:

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from modules.db import create_table_indexes, has_table, replace_table_from_select
-from modules.havi_schema import FORM_COLUMNS, ensure_empty_table, silver_columns
+from modules.havi_schema import FORM_COLUMNS, ensure_empty_table, gold_columns, silver_columns
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class TransformHavi(BaseStage):
                         conn,
                         schema='gold_havi',
                         table=source_table,
-                        columns=silver_columns(source_table),
+                        columns=gold_columns(source_table),
                         select_sql=sql,
                     )
                     create_table_indexes(conn, 'gold_havi', source_table)

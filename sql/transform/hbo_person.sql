@@ -1,7 +1,11 @@
 -- gold_havi.hbo_person
--- Intentional pass-through from silver_havi.
--- The gold layer is the designated place for future business-logic transforms
--- (type casting, computed columns, derived fields). For now the table is an
--- exact copy of silver so that promote_havi can swap it into the stable havi
--- schema without coupling directly to silver. Add transforms here as needed.
-SELECT * FROM silver_havi.hbo_person;
+-- Gold adds typed analytics fields while preserving raw CRF columns.
+SELECT
+    *,
+    CASE
+        WHEN dateofobservation ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+        THEN left(dateofobservation, 10)::date
+    END AS observation_date,
+    CASE WHEN individualnum ~ '^-?[0-9]+$' THEN individualnum::integer END AS individual_number,
+    CASE WHEN age ~ '^-?[0-9]+([.][0-9]+)?$' THEN age::double precision END AS age_years
+FROM silver_havi.hbo_person;

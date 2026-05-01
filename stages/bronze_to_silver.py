@@ -9,7 +9,6 @@ from modules.data_cleaner import DataCleaner
 from modules.db import has_table, quote_identifier
 from modules.havi_schema import (
     FORM_COLUMNS,
-    ensure_empty_table,
     primary_key_columns,
     silver_columns,
 )
@@ -104,17 +103,11 @@ class BronzeToSilver(BaseStage):
         try:
             with self.engine.begin() as conn:
                 for table, df in cleaned_tables.items():
-                    if df.empty:
-                        ensure_empty_table(
-                            conn,
-                            schema='silver_havi',
-                            table=table,
-                            columns=silver_columns(table),
-                        )
-                        logger.info(f"[{table}] empty — ensured silver table exists.")
-                        continue
                     _replace_table(conn, 'silver_havi', table, df)
-                    logger.info(f"[{table}] {len(df)} rows → silver_havi.{table}.")
+                    if df.empty:
+                        logger.info(f"[{table}] 0 rows → silver_havi.{table} (emptied).")
+                    else:
+                        logger.info(f"[{table}] {len(df)} rows → silver_havi.{table}.")
             # Only count rows after the transaction has committed successfully.
             total_rows = sum(len(df) for df in cleaned_tables.values())
         except Exception as exc:

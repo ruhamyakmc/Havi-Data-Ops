@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import pytest
 import pandas as pd
+from unittest.mock import patch
 
 from modules.sqlite_reader import read_sqlite_tables, HAVI_TABLES
 
@@ -84,5 +85,21 @@ def test_all_columns_read_as_str():
         conn.close()
         tables = read_sqlite_tables(path)
         assert tables['ento_collection']['mrccode'].dtype == object
+    finally:
+        os.unlink(path)
+
+
+def test_existing_table_read_error_raises():
+    with tempfile.NamedTemporaryFile(suffix='.sqlite', delete=False) as f:
+        path = f.name
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE ento_collection (uniqueid TEXT)")
+        conn.commit()
+        conn.close()
+
+        with patch('modules.sqlite_reader.pd.read_sql_query', side_effect=Exception('boom')):
+            with pytest.raises(RuntimeError, match="Failed to read table 'ento_collection'"):
+                read_sqlite_tables(path)
     finally:
         os.unlink(path)

@@ -32,6 +32,7 @@ class SqliteToBronze(BaseStage):
 
         total_rows = 0
         errors: list[str] = []
+        warnings: list[dict] = []
 
         with self.engine.begin() as conn:
             for table_name in FORM_COLUMNS:
@@ -53,8 +54,9 @@ class SqliteToBronze(BaseStage):
 
             for zip_path in zip_files:
                 try:
-                    n = self._ingest_zip(zip_path, country, community_name)
+                    n, file_warnings = self._ingest_zip(zip_path, country, community_name)
                     total_rows += n
+                    warnings.extend(file_warnings)
                 except Exception as exc:
                     msg = f"[{country}] Failed to ingest '{os.path.basename(zip_path)}': {exc}"
                     logger.error(msg)
@@ -64,9 +66,10 @@ class SqliteToBronze(BaseStage):
             success=len(errors) == 0,
             rows_written=total_rows,
             errors=errors,
+            warnings=warnings,
         )
 
-    def _ingest_zip(self, zip_path: str, country: str, community: str) -> int:
+    def _ingest_zip(self, zip_path: str, country: str, community: str) -> tuple[int, list[dict]]:
         """Extract SQLite from zip and load all tables into bronze_havi. Returns total rows."""
         last_modified = datetime.fromtimestamp(os.path.getmtime(zip_path), tz=timezone.utc)
 
@@ -82,13 +85,14 @@ class SqliteToBronze(BaseStage):
                 ).fetchone()
                 if row and row.loaded:
                     logger.info(f"Skipping already-loaded: {os.path.basename(zip_path)}")
-                    return 0
+                    return 0, []
         except ProgrammingError:
             pass  # meta table doesn't exist yet on first run
 
         run_id = str(uuid.uuid4())
         extracted_at = datetime.now(timezone.utc)
         total_rows = 0
+        warnings: list[dict] = []
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             sqlite_names = [n for n in zf.namelist() if n.endswith('.sqlite')]
@@ -104,10 +108,52 @@ class SqliteToBronze(BaseStage):
             for table_name, df in tables.items():
                 if df.empty:
                     continue
+                if table_name not in FORM_COLUMNS:
+                    warning = dict(
+                        check='unsupported_table',
+                        severity='WARNING',
+                        country=country,
+                        site=None,
+                        field=table_name,
+                        record_count=len(df),
+                        detail=(
+                            f"Unsupported table {table_name} found in "
+                            f"{os.path.basename(zip_path)}; table was not loaded."
+                        ),
+                        affected_subjids=None,
+                        affected_tablets=os.path.basename(zip_path),
+                    )
+                    warnings.append(warning)
+                    logger.warning("[%s] %s", country, warning['detail'])
+                    continue
 
                 # Restrict to declared form columns — extra device columns are ignored,
                 # missing columns will be NULL in bronze.
                 declared = FORM_COLUMNS.get(table_name, [])
+                source_columns = set(df.columns)
+                declared_columns = set(declared)
+                extra_columns = sorted(source_columns - declared_columns)
+                missing_columns = sorted(declared_columns - source_columns)
+                if extra_columns or missing_columns:
+                    warnings.append(dict(
+                        check='schema_drift',
+                        severity='WARNING',
+                        country=country,
+                        site=None,
+                        field=table_name,
+                        record_count=len(df),
+                        detail=(
+                            f"Schema drift in {os.path.basename(zip_path)}:{table_name}; "
+                            f"extra_columns={extra_columns}; missing_columns={missing_columns}"
+                        ),
+                        affected_subjids=None,
+                        affected_tablets=os.path.basename(zip_path),
+                    ))
+                    logger.warning(
+                        "[%s] Schema drift in %s/%s: extra=%s missing=%s",
+                        country, os.path.basename(zip_path), table_name,
+                        extra_columns, missing_columns,
+                    )
                 df = df[[c for c in declared if c in df.columns]].copy()
 
                 df['run_uuid'] = run_id
@@ -145,4 +191,4 @@ class SqliteToBronze(BaseStage):
                 'ON bronze_havi.meta (file_path, last_modified)'
             ))
 
-        return total_rows
+        return total_rows, warnings

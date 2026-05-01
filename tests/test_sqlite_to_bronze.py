@@ -60,6 +60,23 @@ def _make_sqlite_zip(directory: str) -> str:
     return zip_path
 
 
+def _make_sqlite_zip_with_drift(directory: str) -> str:
+    db_path = os.path.join(directory, 'havi_entomology.sqlite')
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE ento_collection "
+        "(uniqueid TEXT, session_id TEXT, mrccode TEXT, unexpected_col TEXT)"
+    )
+    conn.execute("INSERT INTO ento_collection VALUES ('uid1','s1','12','new')")
+    conn.commit()
+    conn.close()
+
+    zip_path = os.path.join(directory, 'havi_entomology_109_2026-04-29_11_00.zip')
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.write(db_path, 'havi_entomology.sqlite')
+    return zip_path
+
+
 def test_stage_ingests_ento_collection():
     """Stage reads a zip, finds ento_collection data, and writes to bronze_havi."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -103,3 +120,23 @@ def test_stage_succeeds_with_no_sqlite_files():
 
         assert result.success
         assert result.rows_written == 0
+
+
+def test_stage_warns_on_schema_drift():
+    with tempfile.TemporaryDirectory() as tmp:
+        extract_dir = os.path.join(tmp, 'Uganda')
+        os.makedirs(extract_dir)
+        _make_sqlite_zip_with_drift(extract_dir)
+
+        engine, _ = _make_engine()
+
+        with patch('stages.sqlite_to_bronze.get_country_paths',
+                   return_value={'extract_path': extract_dir}):
+            with patch.object(pd.DataFrame, 'to_sql', lambda *args, **kwargs: None):
+                stage = SqliteToBronze(config=_make_config(), engine=engine)
+                result = stage.run()
+
+        assert result.success
+        assert any(w['check'] == 'schema_drift' for w in result.warnings)
+        drift = next(w for w in result.warnings if w['check'] == 'schema_drift')
+        assert 'unexpected_col' in drift['detail']

@@ -27,6 +27,14 @@ def test_sftp_client_list_files_returns_filenames():
     assert result == ['havi_entomology_109_2026-04-29_11_00.zip', 'README.txt']
     mock_sftp.listdir_attr.assert_called_once_with('/Kenya/Sindo/')
     mock_client.set_missing_host_key_policy.assert_called_once()
+    mock_client.connect.assert_called_once_with(
+        'host',
+        username='user',
+        password='pass',
+        timeout=30,
+        banner_timeout=30,
+        auth_timeout=30,
+    )
 
 
 def test_sftp_client_download_file_calls_get():

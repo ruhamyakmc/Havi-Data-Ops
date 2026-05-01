@@ -61,34 +61,39 @@ def _process_device(
       (0, None, warn_dict)  — non-fatal: corrupt zip
     """
     local_archive = os.path.join(extract_dir, filename)
+    partial_archive = f'{local_archive}.part'
 
     if os.path.exists(local_archive):
         logger.info(f"[{country}] Skipping {filename} — already downloaded.")
         return 0, None, None
+    if os.path.exists(partial_archive):
+        logger.warning(f"[{country}] Removing stale partial download: {partial_archive}")
+        os.remove(partial_archive)
 
     try:
         _download_with_retry(
             hostname, username, ftp_password,
-            remote_path, filename, local_archive,
+            remote_path, filename, partial_archive,
         )
     except Exception as exc:
         msg = f"[{country}] Failed to download '{filename}': {exc}"
         logger.error(msg)
-        if os.path.exists(local_archive):
-            os.remove(local_archive)
+        if os.path.exists(partial_archive):
+            os.remove(partial_archive)
         return 0, msg, None
 
     try:
-        with zipfile.ZipFile(local_archive, 'r') as zf:
+        with zipfile.ZipFile(partial_archive, 'r') as zf:
             zf.testzip()  # raises BadZipFile if corrupt
+        os.replace(partial_archive, local_archive)
         logger.info(f"[{country}] Downloaded {filename}")
         return 1, None, None
     except Exception as exc:
         logger.warning(f"[{country}] Corrupt zip '{filename}': {exc} — skipping.")
-        if os.path.exists(local_archive):
+        if os.path.exists(partial_archive):
             quarantine_dir = os.path.join(extract_dir, 'quarantine')
             os.makedirs(quarantine_dir, exist_ok=True)
-            os.replace(local_archive, os.path.join(quarantine_dir, filename))
+            os.replace(partial_archive, os.path.join(quarantine_dir, filename))
         warning = dict(
             check='corrupt_archive',
             severity='ERROR',

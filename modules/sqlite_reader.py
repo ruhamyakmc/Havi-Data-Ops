@@ -28,16 +28,23 @@ def read_sqlite_tables(db_path: str) -> dict[str, pd.DataFrame]:
     result: dict[str, pd.DataFrame] = {}
     conn = sqlite3.connect(db_path)
     try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+        existing_tables = {row[0] for row in rows}
         for table in HAVI_TABLES:
-            try:
-                df = pd.read_sql_query(
-                    f'SELECT * FROM "{table}"', conn, dtype=str
-                )
-                result[table] = df
-                logger.debug(f"Read {len(df)} rows from '{table}'.")
-            except Exception as exc:
-                logger.debug(f"Table '{table}' not found or empty in {db_path}: {exc}")
+            if table not in existing_tables:
+                logger.debug(f"Table '{table}' not found in {db_path}.")
                 result[table] = pd.DataFrame()
+                continue
+            try:
+                df = pd.read_sql_query(f'SELECT * FROM "{table}"', conn, dtype=str)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to read table '{table}' from {db_path}: {exc}"
+                ) from exc
+            result[table] = df
+            logger.debug(f"Read {len(df)} rows from '{table}'.")
     finally:
         conn.close()
     return result

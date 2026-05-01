@@ -33,6 +33,7 @@ def _mock_sftp(filenames):
     instance.__enter__ = MagicMock(return_value=instance)
     instance.__exit__ = MagicMock(return_value=False)
     instance.list_files.return_value = filenames
+    instance.download_file.side_effect = lambda remote, local: open(local, 'wb').close()
     return instance
 
 
@@ -206,6 +207,7 @@ def test_download_retried_on_network_error(tmp_path):
             download_attempts['n'] += 1
             if download_attempts['n'] < 3:
                 raise Exception('network error')
+            open(local, 'wb').close()
         instance.download_file = MagicMock(side_effect=flaky_download)
         return instance
 

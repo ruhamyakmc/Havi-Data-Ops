@@ -62,6 +62,9 @@ class SFTPClient:
                 self._hostname,
                 username=self._username,
                 password=self._password,
+                timeout=30,
+                banner_timeout=30,
+                auth_timeout=30,
             )
             self._sftp = self._client.open_sftp()
         except Exception:

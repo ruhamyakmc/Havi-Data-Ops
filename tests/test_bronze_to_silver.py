@@ -76,10 +76,17 @@ def test_ent_collection_dedup_keeps_indoor_and_outdoor_same_uniqueid():
 
 def test_empty_table_is_skipped():
     engine = MagicMock()
+    writes = {}
+
+    def fake_to_sql(self, name, *args, **kwargs):
+        writes[name] = self.copy()
+
     with patch('stages.bronze_to_silver.has_table', return_value=True):
         with patch('stages.bronze_to_silver.pd.read_sql', return_value=pd.DataFrame()):
-            with patch.object(pd.DataFrame, 'to_sql'):
+            with patch.object(pd.DataFrame, 'to_sql', new=fake_to_sql):
                 stage = BronzeToSilver(config=_make_config(), engine=engine)
                 result = stage.run()
     assert result.success
     assert result.rows_written == 0
+    assert '_stage_ento_collection' in writes
+    assert writes['_stage_ento_collection'].empty

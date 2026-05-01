@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from modules.db import has_table
+from modules.db import create_table_indexes, has_table
 from modules.havi_schema import FORM_COLUMNS, ensure_empty_table, silver_columns
 from stages.base import BaseStage, StageResult
 
@@ -52,6 +52,7 @@ class TransformHavi(BaseStage):
                 sql = sql_path.read_text()
                 try:
                     conn.execute(text(sql))
+                    create_table_indexes(conn, 'gold_havi', source_table)
                     logger.info(f"Executed: {sql_path.name}")
                 except Exception as exc:
                     msg = f"SQL error in '{sql_path.name}': {exc}"

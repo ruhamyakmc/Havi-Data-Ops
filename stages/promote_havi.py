@@ -5,6 +5,7 @@ import re
 
 from sqlalchemy import text
 
+from modules.db import create_table_indexes
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class PromoteHavi(BaseStage):
                     conn.execute(text(
                         f'ALTER TABLE havi."{new_table}" RENAME TO "{table}"'
                     ))
+                    create_table_indexes(conn, 'havi', table)
                     conn.execute(text(f'DROP TABLE IF EXISTS havi."{old_table}" CASCADE'))
 
                     # Recreate any views dropped by CASCADE using the pre-rename definitions.

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, URL
 
-from modules.havi_schema import FORM_COLUMNS
+from modules.havi_schema import FORM_COLUMNS, INDEX_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,18 @@ def init_schemas(engine: Engine) -> None:
 def has_table(engine: Engine, table: str, schema: str) -> bool:
     """Return whether a table exists in a schema."""
     return inspect(engine).has_table(table, schema=schema)
+
+
+def create_table_indexes(conn, schema: str, table: str) -> None:
+    """Create standard non-unique indexes for a modeled HAVI table."""
+    for columns in INDEX_COLUMNS.get(table, []):
+        suffix = '_'.join(columns)
+        index_name = f'idx_{table}_{suffix}'
+        quoted_columns = ', '.join(quote_identifier(col) for col in columns)
+        conn.execute(text(
+            f'CREATE INDEX IF NOT EXISTS {quote_identifier(index_name)} '
+            f'ON {quote_identifier(schema)}.{quote_identifier(table)} ({quoted_columns})'
+        ))
 
 
 def log_pipeline_run(

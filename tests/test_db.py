@@ -1,6 +1,12 @@
 import pytest
 from unittest.mock import MagicMock, patch, call
-from modules.db import create_db_engine, init_schemas, log_pipeline_row_counts, SCHEMAS
+from modules.db import (
+    create_db_engine,
+    create_table_indexes,
+    init_schemas,
+    log_pipeline_row_counts,
+    SCHEMAS,
+)
 
 def test_init_schemas_creates_all_schemas():
     mock_conn = MagicMock()
@@ -102,3 +108,24 @@ def test_log_pipeline_row_counts_warns_on_mismatch(caplog):
         log_pipeline_row_counts(mock_engine, 'run-1', tables=['ento_collection'])
 
     assert 'Layer row-count mismatch for ento_collection' in caplog.text
+
+
+def test_create_table_indexes_creates_configured_indexes():
+    mock_conn = MagicMock()
+
+    create_table_indexes(mock_conn, 'silver_havi', 'ento_collection')
+
+    executed_sql = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+    assert any('CREATE INDEX IF NOT EXISTS "idx_ento_collection_uniqueid_clocation"' in sql
+               for sql in executed_sql)
+    assert any('ON "silver_havi"."ento_collection" ("uniqueid", "clocation")' in sql
+               for sql in executed_sql)
+    assert any('"idx_ento_collection_run_uuid"' in sql for sql in executed_sql)
+
+
+def test_create_table_indexes_ignores_unmodeled_tables():
+    mock_conn = MagicMock()
+
+    create_table_indexes(mock_conn, 'havi', 'ds_validation_report')
+
+    mock_conn.execute.assert_not_called()

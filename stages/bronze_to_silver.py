@@ -6,7 +6,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from modules.data_cleaner import DataCleaner
-from modules.db import has_table, quote_identifier
+from modules.db import create_table_indexes, has_table, quote_identifier
 from modules.havi_schema import (
     FORM_COLUMNS,
     primary_key_columns,
@@ -104,6 +104,7 @@ class BronzeToSilver(BaseStage):
             with self.engine.begin() as conn:
                 for table, df in cleaned_tables.items():
                     _replace_table(conn, 'silver_havi', table, df)
+                    create_table_indexes(conn, 'silver_havi', table)
                     if df.empty:
                         logger.info(f"[{table}] 0 rows → silver_havi.{table} (emptied).")
                     else:

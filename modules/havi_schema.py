@@ -147,6 +147,43 @@ PRIMARY_KEYS: dict[str, list[str]] = {
 
 DEFAULT_PRIMARY_KEY = ['uniqueid']
 
+INDEX_COLUMNS: dict[str, list[list[str]]] = {
+    'ento_collection': [
+        ['uniqueid', 'clocation'],
+        ['session_id'],
+        ['mrccode'],
+        ['hhid'],
+        ['run_uuid'],
+    ],
+    'ento_mosquito': [
+        ['uniqueid'],
+        ['session_id'],
+        ['mosq_barcode'],
+        ['run_uuid'],
+    ],
+    'pheno_site': [
+        ['site_id'],
+        ['uniqueid'],
+        ['run_uuid'],
+    ],
+    'pheno_assay': [
+        ['site_id'],
+        ['uniqueid'],
+        ['run_uuid'],
+    ],
+    'hbo_household': [
+        ['session_id'],
+        ['hhid'],
+        ['uniqueid'],
+        ['run_uuid'],
+    ],
+    'hbo_person': [
+        ['session_id'],
+        ['uniqueid'],
+        ['run_uuid'],
+    ],
+}
+
 
 def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'

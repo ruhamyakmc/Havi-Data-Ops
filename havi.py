@@ -8,7 +8,12 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 from modules.config import ConfigLoader
-from modules.db import create_db_engine, init_schemas, log_pipeline_run
+from modules.db import (
+    create_db_engine,
+    init_schemas,
+    log_pipeline_row_counts,
+    log_pipeline_run,
+)
 from modules.notifier import send_pipeline_report
 from stages.base import StageResult
 from stages.bronze_to_silver import BronzeToSilver
@@ -106,6 +111,7 @@ def run_pipeline(stages: list[str], config: ConfigLoader, engine) -> None:
 
     _log_summary(results, failed)
     log_pipeline_run(engine, run_id, started_at, results, stages)
+    log_pipeline_row_counts(engine, run_id)
     send_pipeline_report(results=results, stages=stages, engine=engine, config=config)
     if failed:
         sys.exit(1)

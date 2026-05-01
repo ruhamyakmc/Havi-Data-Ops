@@ -133,8 +133,12 @@ BRONZE_METADATA_COLUMNS = [
 ]
 
 SILVER_METADATA_COLUMNS = [
+    'run_uuid',
+    'file_name',
+    'file_path',
     'country',
     'community',
+    'extracted_at',
 ]
 
 PRIMARY_KEYS: dict[str, list[str]] = {

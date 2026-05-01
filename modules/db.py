@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, URL
 
+from modules.havi_schema import FORM_COLUMNS
+
 logger = logging.getLogger(__name__)
 
 SCHEMAS = ['bronze_havi', 'silver_havi', 'gold_havi', 'havi']
@@ -117,3 +119,94 @@ def log_pipeline_run(
         logger.info('Pipeline run %s logged (%d stage(s)).', run_id, len(rows))
     except Exception as exc:
         logger.error('Failed to write pipeline_run_log: %s', exc)
+
+
+def log_pipeline_row_counts(
+    engine: Engine,
+    run_id: str,
+    tables: list[str] | None = None,
+) -> None:
+    """Persist per-layer row counts and warn on count mismatches.
+
+    This is intentionally non-fatal: row-count audit failures should be visible,
+    but should not hide the ETL result or notification path.
+    """
+    tables = tables or sorted(FORM_COLUMNS)
+    counted_at = datetime.now(timezone.utc)
+    rows: list[dict] = []
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS havi.pipeline_row_counts (
+                    run_id     TEXT        NOT NULL,
+                    counted_at TIMESTAMPTZ NOT NULL,
+                    layer      TEXT        NOT NULL,
+                    table_name TEXT        NOT NULL,
+                    row_count  INTEGER     NOT NULL
+                )
+            """))
+
+            for schema in SCHEMAS:
+                for table in tables:
+                    exists = conn.execute(
+                        text("""
+                            SELECT EXISTS (
+                                SELECT 1
+                                FROM information_schema.tables
+                                WHERE table_schema = :schema
+                                  AND table_name = :table
+                                  AND table_type = 'BASE TABLE'
+                            )
+                        """),
+                        {'schema': schema, 'table': table},
+                    ).scalar()
+                    if not exists:
+                        continue
+
+                    row_count = conn.execute(text(
+                        f'SELECT COUNT(*) FROM {quote_identifier(schema)}.{quote_identifier(table)}'
+                    )).scalar_one()
+                    rows.append({
+                        'run_id': run_id,
+                        'counted_at': counted_at,
+                        'layer': schema,
+                        'table_name': table,
+                        'row_count': int(row_count),
+                    })
+
+            if rows:
+                conn.execute(
+                    text("""
+                        INSERT INTO havi.pipeline_row_counts
+                            (run_id, counted_at, layer, table_name, row_count)
+                        VALUES
+                            (:run_id, :counted_at, :layer, :table_name, :row_count)
+                    """),
+                    rows,
+                )
+
+        _log_count_mismatches(rows)
+        logger.info('Pipeline row counts logged for run %s (%d row(s)).', run_id, len(rows))
+    except Exception as exc:
+        logger.error('Failed to write pipeline_row_counts: %s', exc)
+
+
+def _log_count_mismatches(rows: list[dict]) -> None:
+    by_table: dict[str, dict[str, int]] = {}
+    for row in rows:
+        by_table.setdefault(row['table_name'], {})[row['layer']] = row['row_count']
+
+    comparable_layers = ['silver_havi', 'gold_havi', 'havi']
+    for table, counts in sorted(by_table.items()):
+        comparable = {
+            layer: counts[layer]
+            for layer in comparable_layers
+            if layer in counts
+        }
+        if len(comparable) >= 2 and len(set(comparable.values())) > 1:
+            logger.warning(
+                'Layer row-count mismatch for %s: %s',
+                table,
+                ', '.join(f'{layer}={count}' for layer, count in comparable.items()),
+            )

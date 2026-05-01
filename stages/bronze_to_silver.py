@@ -85,9 +85,9 @@ class BronzeToSilver(BaseStage):
                         f"[{table}] Dedup key '{dedup_key}' not found — skipping dedup."
                     )
 
-                # Drop ETL tracking columns before writing to silver.
+                # Keep source lineage columns in silver; drop only implementation-only fields.
                 df = df.drop(
-                    columns=['_source_db', 'run_uuid', 'file_name', 'file_path', 'extracted_at'],
+                    columns=['_source_db'],
                     errors='ignore',
                 )
                 cleaned_tables[table] = df

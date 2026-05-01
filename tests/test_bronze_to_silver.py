@@ -72,6 +72,10 @@ def test_ent_collection_dedup_keeps_indoor_and_outdoor_same_uniqueid():
 
     assert result.success
     assert len(writes['_stage_ento_collection']) == 3
+    assert {
+        'run_uuid', 'file_name', 'file_path', 'extracted_at', 'country', 'community',
+    }.issubset(writes['_stage_ento_collection'].columns)
+    assert '_source_db' not in writes['_stage_ento_collection'].columns
 
 
 def test_empty_table_is_skipped():
@@ -90,3 +94,6 @@ def test_empty_table_is_skipped():
     assert result.rows_written == 0
     assert '_stage_ento_collection' in writes
     assert writes['_stage_ento_collection'].empty
+    assert {
+        'run_uuid', 'file_name', 'file_path', 'extracted_at', 'country', 'community',
+    }.issubset(writes['_stage_ento_collection'].columns)

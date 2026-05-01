@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: havi
+      POSTGRES_USER: havi_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U havi_user"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@havi.local
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    ports:
+      - "5051:80"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  etl:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    secrets:
+      - db_password
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./secrets:/app/secrets:ro
+      - ./Downloads:/app/Downloads
+      - ./Extracted:/app/Extracted
+      - ./logs:/var/log/havi
+    command: ["cron", "-f"]
+    restart: on-failure:3
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep cron || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+
+volumes:
+  pgdata:

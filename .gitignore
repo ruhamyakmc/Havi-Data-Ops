@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Secrets and config (contains FTP credentials, DB password env var names)
+.env
+config.json
+secrets/
+
+# Data directories (large binary files, managed outside git)
+Downloads/
+Extracted/
+Output/
+data/
+
+# Logs
+*.log
+logs/
+
+# Git worktrees
+.worktrees/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# pytest
+.pytest_cache/
+
+# Claude / superpowers planning artifacts
+docs/

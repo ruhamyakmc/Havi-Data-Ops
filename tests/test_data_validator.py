@@ -39,6 +39,7 @@ def _mosquito(session_id='sess1', n=3) -> pd.DataFrame:
         rows.append({
             'uniqueid': f'muid{i}',
             'session_id': session_id,
+            'clocation': '1',
             'mosqnum': str(i),
             'chour': '1',
             'grossspecies': '1',
@@ -151,7 +152,7 @@ def test_child_count_skips_ambiguous_session_without_mosquito_clocation():
         clocation=['1', '2'],
         numfanoph=['1', '1'],
     )
-    mosq = _mosquito(session_id='s1', n=2)
+    mosq = _mosquito(session_id='s1', n=2).drop(columns=['clocation'])
     report = V.validate_collection(df, mosq)
     assert report[report['check'] == 'count_mismatch'].empty
     assert report[report['check'] == 'missing_child_records'].empty
@@ -160,13 +161,13 @@ def test_child_count_skips_ambiguous_session_without_mosquito_clocation():
 def test_child_count_uses_clocation_specific_session_id():
     df = _collection(
         uniqueid=['uid1', 'uid1'],
-        session_id=['s1_outdoor', 's1_indoor'],
+        session_id=['s1', 's1'],
         clocation=['1', '2'],
         numfanoph=['2', '1'],
     )
     mosq = pd.concat([
-        _mosquito(session_id='s1_outdoor', n=2),
-        _mosquito(session_id='s1_indoor', n=1),
+        _mosquito(session_id='s1', n=2).assign(clocation='1'),
+        _mosquito(session_id='s1', n=1).assign(clocation='2'),
     ], ignore_index=True)
 
     report = V.validate_collection(df, mosq)

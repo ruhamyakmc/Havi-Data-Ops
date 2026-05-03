@@ -25,6 +25,7 @@ FORM_COLUMNS: dict[str, list[str]] = {
         'session_id',
         'hhid',
         'dateofcollection',
+        'clocation',
         'mrccode',
         'sitecode',
         'mosqnum',
@@ -200,6 +201,7 @@ INDEX_COLUMNS: dict[str, list[list[str]]] = {
     ],
     'ento_mosquito': [
         ['uniqueid'],
+        ['session_id', 'clocation'],
         ['session_id'],
         ['mosq_barcode'],
         ['run_uuid'],
@@ -249,6 +251,11 @@ def ensure_empty_table(conn, schema: str, table: str, columns: list[str]) -> Non
         f'CREATE TABLE IF NOT EXISTS {_quote_identifier(schema)}.{_quote_identifier(table)} '
         f'({quoted_columns})'
     ))
+    for column in columns:
+        conn.execute(text(
+            f'ALTER TABLE {_quote_identifier(schema)}.{_quote_identifier(table)} '
+            f'ADD COLUMN IF NOT EXISTS {_quote_identifier(column)} {column_type(column)}'
+        ))
 
 
 def bronze_columns(table: str) -> list[str]:

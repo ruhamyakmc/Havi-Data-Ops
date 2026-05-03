@@ -10,6 +10,7 @@ from modules.db import (
     replace_table_from_select,
     SCHEMAS,
 )
+from modules.havi_schema import ensure_empty_table
 from stages.base import StageResult
 
 def test_init_schemas_creates_all_schemas():
@@ -27,6 +28,18 @@ def test_init_schemas_creates_all_schemas():
 
 def test_schemas_list_contains_all_layers():
     assert set(SCHEMAS) == {'bronze_havi', 'silver_havi', 'gold_havi', 'havi'}
+
+
+def test_ensure_empty_table_adds_missing_columns_to_existing_table():
+    mock_conn = MagicMock()
+
+    ensure_empty_table(mock_conn, 'bronze_havi', 'ento_mosquito', ['uniqueid', 'clocation'])
+
+    executed_sql = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+    assert any('CREATE TABLE IF NOT EXISTS "bronze_havi"."ento_mosquito"' in sql
+               for sql in executed_sql)
+    assert any('ADD COLUMN IF NOT EXISTS "uniqueid" TEXT' in sql for sql in executed_sql)
+    assert any('ADD COLUMN IF NOT EXISTS "clocation" TEXT' in sql for sql in executed_sql)
 
 def test_create_db_engine_reads_secret_file(tmp_path):
     secret_file = tmp_path / 'db_password'
@@ -224,7 +237,9 @@ def test_replace_table_from_select_uses_explicit_column_definitions():
     )
     assert any(
         'INSERT INTO "gold_havi"."_stage_ento_collection" '
-        '("uniqueid", "extracted_at") SELECT uniqueid, extracted_at' in sql
+        '("uniqueid", "extracted_at") SELECT src."uniqueid", src."extracted_at" '
+        'FROM (SELECT uniqueid, extracted_at FROM silver_havi.ento_collection) AS src'
+        in sql
         for sql in executed_sql
     )
     assert any('DROP TABLE IF EXISTS "gold_havi"."ento_collection"' in sql

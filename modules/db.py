@@ -106,13 +106,19 @@ def replace_table_from_select(
     quoted_table = quote_identifier(table)
     quoted_stage = quote_identifier(stage_table)
     quoted_columns = ', '.join(quote_identifier(col) for col in columns)
+    projected_columns = ', '.join(
+        f'src.{quote_identifier(col)}'
+        for col in columns
+    )
+    source_sql = select_sql.strip().rstrip(';')
 
     conn.execute(text(f'DROP TABLE IF EXISTS {quoted_schema}.{quoted_stage}'))
     conn.execute(text(
         f'CREATE TABLE {quoted_schema}.{quoted_stage} ({column_definitions(columns)})'
     ))
     conn.execute(text(
-        f'INSERT INTO {quoted_schema}.{quoted_stage} ({quoted_columns}) {select_sql}'
+        f'INSERT INTO {quoted_schema}.{quoted_stage} ({quoted_columns}) '
+        f'SELECT {projected_columns} FROM ({source_sql}) AS src'
     ))
     conn.execute(text(f'DROP TABLE IF EXISTS {quoted_schema}.{quoted_table}'))
     conn.execute(text(

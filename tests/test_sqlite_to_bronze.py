@@ -8,6 +8,7 @@ import pytest
 import pandas as pd
 from unittest.mock import MagicMock, patch, call
 
+from modules.havi_schema import FORM_COLUMNS
 from stages.sqlite_to_bronze import SqliteToBronze
 
 
@@ -68,6 +69,35 @@ def _make_sqlite_zip_with_drift(directory: str) -> str:
         "(uniqueid TEXT, session_id TEXT, mrccode TEXT, unexpected_col TEXT)"
     )
     conn.execute("INSERT INTO ento_collection VALUES ('uid1','s1','12','new')")
+    conn.commit()
+    conn.close()
+
+    zip_path = os.path.join(directory, 'havi_entomology_109_2026-04-29_11_00.zip')
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.write(db_path, 'havi_entomology.sqlite')
+    return zip_path
+
+
+def _make_sqlite_zip_with_mosquito_clocation(directory: str) -> str:
+    db_path = os.path.join(directory, 'havi_entomology.sqlite')
+    conn = sqlite3.connect(db_path)
+    columns = FORM_COLUMNS['ento_mosquito']
+    conn.execute(
+        "CREATE TABLE ento_mosquito "
+        f"({', '.join(f'{col} TEXT' for col in columns)})"
+    )
+    values = {col: '' for col in columns}
+    values.update({
+        'uniqueid': 'm1',
+        'session_id': 's1',
+        'clocation': '1',
+        'mosq_barcode': 'H26-KM1-0001',
+    })
+    placeholders = ', '.join('?' for _ in columns)
+    conn.execute(
+        f"INSERT INTO ento_mosquito VALUES ({placeholders})",
+        [values[col] for col in columns],
+    )
     conn.commit()
     conn.close()
 
@@ -140,3 +170,21 @@ def test_stage_warns_on_schema_drift():
         assert any(w['check'] == 'schema_drift' for w in result.warnings)
         drift = next(w for w in result.warnings if w['check'] == 'schema_drift')
         assert 'unexpected_col' in drift['detail']
+
+
+def test_stage_accepts_ento_mosquito_clocation_without_schema_drift():
+    with tempfile.TemporaryDirectory() as tmp:
+        extract_dir = os.path.join(tmp, 'Uganda')
+        os.makedirs(extract_dir)
+        _make_sqlite_zip_with_mosquito_clocation(extract_dir)
+
+        engine, _ = _make_engine()
+
+        with patch('stages.sqlite_to_bronze.get_country_paths',
+                   return_value={'extract_path': extract_dir}):
+            with patch.object(pd.DataFrame, 'to_sql', lambda *args, **kwargs: None):
+                stage = SqliteToBronze(config=_make_config(), engine=engine)
+                result = stage.run()
+
+        assert result.success
+        assert not any(w['check'] == 'schema_drift' for w in result.warnings)

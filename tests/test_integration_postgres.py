@@ -59,6 +59,7 @@ def _write_fixture_sqlite(path: Path) -> None:
                 session_id TEXT,
                 hhid TEXT,
                 dateofcollection TEXT,
+                clocation TEXT,
                 mrccode TEXT,
                 sitecode TEXT,
                 mosqnum TEXT,
@@ -78,7 +79,7 @@ def _write_fixture_sqlite(path: Path) -> None:
         """)
         conn.execute("""
             INSERT INTO ento_mosquito VALUES (
-                's1', 'hh1', '2026-04-20', '12', 'site-1', '1', '18',
+                's1', 'hh1', '2026-04-20', 'indoor', '12', 'site-1', '1', '18',
                 'Anopheles', 'fed', '1', '1', 'mb1', 'm1', '1.0',
                 'survey-1', '2026-04-20T18:10:00Z',
                 '2026-04-20T18:20:00Z', '2026-04-20T18:25:00Z'

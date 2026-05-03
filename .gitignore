@@ -25,6 +25,11 @@ Extracted/
 Output/
 data/
 
+# Local study documents / data dictionaries
+*.xlsx
+*.xls
+*.csv
+
 # Logs
 *.log
 logs/

@@ -1,11 +1,33 @@
+.git/
+.github/
+.DS_Store
+**/.DS_Store
+
+# Local config and secrets must never be baked into images.
+.env
+config.json
+secrets/
 keyFiles/
-Downloads/
-Extracted/
 *.key
 *.ini
+
+# Data, logs, and local artifacts.
+Downloads/
+Extracted/
+Output/
+data/
+logs/
+*.log
+*.xlsx
+*.xls
+*.csv
+
+# Python/test caches.
 __pycache__/
 **/__pycache__/
 *.pyc
-.env
+.pytest_cache/
+
+# Local planning/tool artifacts.
 docs/
-tests/__pycache__/
+.claude/

@@ -22,12 +22,16 @@ fi
 
 cat > /etc/cron.d/havi <<EOF
 PATH=/usr/local/bin:/usr/bin:/bin
-${PIPELINE_CRON} root cd /app && python havi.py -a >> /var/log/havi/pipeline.log 2>&1
+${PIPELINE_CRON} havi cd /app && python havi.py -a >> /var/log/havi/pipeline.log 2>&1
 
 EOF
 
 chmod 0644 /etc/cron.d/havi
 mkdir -p /var/log/havi
 touch /var/log/havi/pipeline.log
+chown -R havi:havi /var/log/havi /app/Downloads /app/Extracted
+
+# Keep local cron logs bounded when bind-mounted logs are used.
+find /var/log/havi -name "*.log" -size +50M -exec truncate -s 0 {} \;
 
 exec "$@"

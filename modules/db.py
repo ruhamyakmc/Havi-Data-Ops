@@ -17,6 +17,7 @@ from modules.havi_schema import (
 logger = logging.getLogger(__name__)
 
 SCHEMAS = ['bronze_havi', 'silver_havi', 'gold_havi', 'havi']
+ROW_COUNT_DROP_ALERT_THRESHOLD = 0.25
 
 
 def quote_identifier(identifier: str) -> str:
@@ -205,6 +206,7 @@ def log_pipeline_row_counts(
     engine: Engine,
     run_id: str,
     tables: list[str] | None = None,
+    drop_alert_threshold: float = ROW_COUNT_DROP_ALERT_THRESHOLD,
 ) -> None:
     """Persist per-layer row counts and warn on count mismatches.
 
@@ -214,6 +216,7 @@ def log_pipeline_row_counts(
     tables = tables or sorted(FORM_COLUMNS)
     counted_at = datetime.now(timezone.utc)
     rows: list[dict] = []
+    previous_counts: dict[tuple[str, str], int] = {}
 
     try:
         with engine.begin() as conn:
@@ -247,6 +250,20 @@ def log_pipeline_row_counts(
                     row_count = conn.execute(text(
                         f'SELECT COUNT(*) FROM {quote_identifier(schema)}.{quote_identifier(table)}'
                     )).scalar_one()
+                    previous_count = conn.execute(
+                        text("""
+                            SELECT row_count
+                            FROM havi.pipeline_row_counts
+                            WHERE layer = :layer
+                              AND table_name = :table
+                              AND run_id <> :run_id
+                            ORDER BY counted_at DESC
+                            LIMIT 1
+                        """),
+                        {'layer': schema, 'table': table, 'run_id': run_id},
+                    ).scalar()
+                    if previous_count is not None:
+                        previous_counts[(schema, table)] = int(previous_count)
                     rows.append({
                         'run_id': run_id,
                         'counted_at': counted_at,
@@ -267,6 +284,7 @@ def log_pipeline_row_counts(
                 )
 
         _log_count_mismatches(rows)
+        _log_count_drops(rows, previous_counts, drop_alert_threshold)
         logger.info('Pipeline row counts logged for run %s (%d row(s)).', run_id, len(rows))
     except Exception as exc:
         logger.error('Failed to write pipeline_row_counts: %s', exc)
@@ -289,4 +307,31 @@ def _log_count_mismatches(rows: list[dict]) -> None:
                 'Layer row-count mismatch for %s: %s',
                 table,
                 ', '.join(f'{layer}={count}' for layer, count in comparable.items()),
+            )
+
+
+def _log_count_drops(
+    rows: list[dict],
+    previous_counts: dict[tuple[str, str], int],
+    threshold: float,
+) -> None:
+    if threshold <= 0:
+        return
+
+    for row in rows:
+        layer = row['layer']
+        table = row['table_name']
+        previous = previous_counts.get((layer, table))
+        current = row['row_count']
+        if previous is None or previous <= 0:
+            continue
+        drop_fraction = (previous - current) / previous
+        if drop_fraction >= threshold:
+            logger.warning(
+                'Row-count drop alert for %s.%s: current=%s previous=%s drop=%.1f%%',
+                layer,
+                table,
+                current,
+                previous,
+                drop_fraction * 100,
             )

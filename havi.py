@@ -16,6 +16,7 @@ from modules.db import (
     log_pipeline_row_counts,
     log_pipeline_run,
 )
+from modules.migrations import run_migrations
 from modules.notifier import send_pipeline_report
 from stages.base import StageResult
 from stages.bronze_to_silver import BronzeToSilver
@@ -162,6 +163,7 @@ def main() -> None:
     config = ConfigLoader('config.json')
     engine = create_db_engine(config)
     init_schemas(engine)
+    run_migrations(engine)
 
     stages = build_run_list(STAGE_DEPS, run_all=args.all, pipeline=args.pipeline)
     run_pipeline(stages, config, engine)

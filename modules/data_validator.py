@@ -89,9 +89,11 @@ _DEFAULT_VALID_MRC_CODES: frozenset[int] = frozenset(
 )
 _BARCODE_RE = re.compile(r'^H26-[A-Z0-9]+-\d{4}$', re.IGNORECASE)
 
+_CLOCATION_MAP = {1: 'outdoor', 2: 'indoor'}
+
 _REPORT_COLS = [
     'check', 'severity', 'mrccode', 'field',
-    'record_count', 'detail', 'affected_ids',
+    'record_count', 'detail', 'clocation',
 ]
 
 _COLLECTION_REQUIRED = [
@@ -121,14 +123,14 @@ _HBO_HOUSEHOLD_REQUIRED = ['uniqueid', 'session_id', 'mrccode', 'hhid', 'dateofo
 _HBO_PERSON_REQUIRED = ['uniqueid', 'session_id', 'individualnum']
 
 
-def _ids(df: pd.DataFrame, mask) -> str:
-    """Return semicolon-separated uniqueid values for rows matching mask."""
-    if 'uniqueid' not in df.columns:
+def _clocation(df: pd.DataFrame, mask) -> str:
+    """Return human-readable clocation label(s) for rows matching mask."""
+    if 'clocation' not in df.columns:
         return ''
     try:
-        vals = df.loc[mask, 'uniqueid'].dropna().astype(str)
-        vals = vals[vals.str.strip() != '']
-        return '; '.join(sorted(vals.unique().tolist()))
+        vals = pd.to_numeric(df.loc[mask, 'clocation'], errors='coerce').dropna().astype(int).unique()
+        labels = sorted({_CLOCATION_MAP.get(v, str(v)) for v in vals})
+        return ' & '.join(labels)
     except Exception:
         return ''
 
@@ -139,7 +141,7 @@ def _issue(
     field: str,
     count: int,
     detail: str,
-    affected: str = '',
+    clocation: str = '',
     mrccode: str = '',
 ) -> dict:
     return {
@@ -149,7 +151,7 @@ def _issue(
         'field': field,
         'record_count': count,
         'detail': detail,
-        'affected_ids': affected,
+        'clocation': clocation,
     }
 
 
@@ -307,7 +309,7 @@ class EntomologyValidator:
                 issues.append(_issue(
                     'missing_required_field', 'ERROR', fname, n,
                     f"{n} record(s) have no value for required field '{fname}'.",
-                    _ids(df, null_mask),
+                    _clocation(df, null_mask),
                 ))
         return issues
 
@@ -324,7 +326,7 @@ class EntomologyValidator:
             'duplicate_uniqueid', 'ERROR', 'uniqueid', n,
             f"{n} row(s) share a uniqueid with at least one other row "
             f"({col[dup].nunique()} distinct value(s) affected).",
-            _ids(df, col[dup].index),
+            _clocation(df, col[dup].index),
         )]
 
     def _duplicate_collection_key(self, df: pd.DataFrame) -> list[dict]:
@@ -342,7 +344,7 @@ class EntomologyValidator:
             'duplicate_collection_key', 'ERROR', 'uniqueid', n,
             f"{n} row(s) share the same ento_collection key "
             f"({', '.join(key_cols)}).",
-            _ids(df, dup),
+            _clocation(df, dup),
         )]
 
     def _orphan_records(
@@ -363,7 +365,7 @@ class EntomologyValidator:
         return [_issue(
             check_name, 'ERROR', key, n,
             f"{n} record(s) have a '{key}' not found in the parent table.",
-            _ids(child_df, orphan_mask),
+            _clocation(child_df, orphan_mask),
         )]
 
     def _code_validity(
@@ -387,7 +389,7 @@ class EntomologyValidator:
             check_name, 'ERROR', field, n,
             f"{n} record(s) have an invalid '{field}' code: {bad_vals}. "
             f"Expected: {label}.",
-            _ids(df, invalid),
+            _clocation(df, invalid),
         )]
 
     def _sparse_columns(self, df: pd.DataFrame) -> list[dict]:
@@ -424,7 +426,7 @@ class EntomologyValidator:
             'invalid_mrccode', 'ERROR', 'mrccode', n,
             f"{n} record(s) have an unrecognised mrccode: {bad_vals}. "
             f"Valid codes: {sorted(self._valid_mrc_codes)}.",
-            _ids(df, invalid),
+            _clocation(df, invalid),
         )]
 
     def _counts_nonnegative(self, df: pd.DataFrame) -> list[dict]:
@@ -439,7 +441,7 @@ class EntomologyValidator:
                 issues.append(_issue(
                     'negative_count', 'ERROR', field, n,
                     f"{n} record(s) have a negative value for '{field}'.",
-                    _ids(df, negative),
+                    _clocation(df, negative),
                 ))
         return issues
 
@@ -456,7 +458,7 @@ class EntomologyValidator:
         return [_issue(
             check_name, 'ERROR', field, n,
             f"{n} record(s) have a future {field}. Examples: {examples}.",
-            _ids(df, future),
+            _clocation(df, future),
         )]
 
     def _date_stale(
@@ -474,7 +476,7 @@ class EntomologyValidator:
         return [_issue(
             check_name, 'WARNING', field, n,
             f"{n} record(s) have a {field} more than {days} days in the past.",
-            _ids(df, stale),
+            _clocation(df, stale),
         )]
 
     def _duration_impossible(self, df: pd.DataFrame) -> list[dict]:
@@ -490,7 +492,7 @@ class EntomologyValidator:
         return [_issue(
             'impossible_duration', 'ERROR', 'stoptime', n,
             f"{n} record(s) have stoptime before starttime.",
-            _ids(df, impossible),
+            _clocation(df, impossible),
         )]
 
     def _duration_too_long(self, df: pd.DataFrame, hours: int = 12) -> list[dict]:
@@ -507,7 +509,7 @@ class EntomologyValidator:
         return [_issue(
             'duration_too_long', 'WARNING', 'stoptime', n,
             f"{n} record(s) have a duration exceeding {hours} hours.",
-            _ids(df, too_long),
+            _clocation(df, too_long),
         )]
 
     def _count_vs_children(
@@ -571,7 +573,7 @@ class EntomologyValidator:
                 'unexpected_child_records', 'ERROR', 'numfanoph', n,
                 f"{n} collection record(s) have numfanoph=0 but mosquito child records exist. "
                 f"Examples: {examples}.",
-                _ids(counts, counts.index.isin(unexpected.index)),
+                _clocation(counts, counts.index.isin(unexpected.index)),
             ))
 
         # Check 11: numfanoph >= 1 but no children
@@ -586,7 +588,7 @@ class EntomologyValidator:
                 'missing_child_records', 'WARNING', 'numfanoph', n,
                 f"{n} collection record(s) declare numfanoph >= 1 but have no mosquito records. "
                 f"Examples: {examples}.",
-                _ids(counts, counts.index.isin(missing.index)),
+                _clocation(counts, counts.index.isin(missing.index)),
             ))
 
         # Check 12: numfanoph != child count
@@ -608,7 +610,7 @@ class EntomologyValidator:
                 'count_mismatch', 'ERROR', 'numfanoph', n,
                 f"{n} collection record(s) have numfanoph != actual mosquito row count. "
                 f"Examples: {examples}.",
-                _ids(counts, counts.index.isin(mismatch.index)),
+                _clocation(counts, counts.index.isin(mismatch.index)),
             ))
 
         return issues
@@ -626,7 +628,7 @@ class EntomologyValidator:
         return [_issue(
             'duplicate_session_datasource', 'WARNING', 'session_id', n,
             f"{n} record(s) share the same {' + '.join(key_cols)} combination.",
-            _ids(df, dup),
+            _clocation(df, dup),
         )]
 
     def _device_record_count(self, df: pd.DataFrame) -> list[dict]:
@@ -661,7 +663,7 @@ class EntomologyValidator:
             'invalid_barcode_format', 'ERROR', 'mosq_barcode', n,
             f"{n} barcode(s) do not match H26-{{sitecode}}-{{4digits}}. "
             f"Examples: {examples}.",
-            '; '.join(raw[bad].index.astype(str).tolist()[:10]),
+            _clocation(df, bad),
         )]
 
     def _barcode_uniqueness(self, df: pd.DataFrame) -> list[dict]:
@@ -678,7 +680,7 @@ class EntomologyValidator:
             'duplicate_barcode', 'ERROR', 'mosq_barcode', n,
             f"{n} record(s) share a mosq_barcode with at least one other row. "
             f"Examples: {examples}.",
-            _ids(df, raw[dup].index),
+            _clocation(df, raw[dup].index),
         )]
 
     # ------------------------------------------------------------------
@@ -698,7 +700,7 @@ class EntomologyValidator:
         return [_issue(
             'dead_exceeds_tested', 'ERROR', 'numdead', n,
             f"{n} record(s) have numdead > numtested.",
-            _ids(df, bad),
+            _clocation(df, bad),
         )]
 
     def _kd_le_tested(self, df: pd.DataFrame) -> list[dict]:
@@ -714,7 +716,7 @@ class EntomologyValidator:
         return [_issue(
             'kd_exceeds_tested', 'ERROR', 'numkd', n,
             f"{n} record(s) have numkd > numtested.",
-            _ids(df, bad),
+            _clocation(df, bad),
         )]
 
     def _pct_consistency(self, df: pd.DataFrame) -> list[dict]:
@@ -738,7 +740,7 @@ class EntomologyValidator:
                     check_name, 'WARNING', pct_col, n,
                     f"{n} record(s) have a {pct_col} that does not match "
                     f"({count_col}/numtested)*100 within 0.1%.",
-                    _ids(df, mismatch),
+                    _clocation(df, mismatch),
                 ))
         return issues
 
@@ -760,7 +762,7 @@ class EntomologyValidator:
             'invalid_hhid_format', 'ERROR', 'hhid', n,
             f"{n} record(s) have an hhid that is not exactly 9 numeric digits. "
             f"Examples: {examples}.",
-            _ids(df, bad),
+            _clocation(df, bad),
         )]
 
     def _hbo_hhid_unique_per_date(self, df: pd.DataFrame) -> list[dict]:
@@ -774,7 +776,7 @@ class EntomologyValidator:
         return [_issue(
             'duplicate_hhid_per_date', 'ERROR', 'hhid', n,
             f"{n} record(s) share the same hhid + dateofobservation combination.",
-            _ids(df, dup),
+            _clocation(df, dup),
         )]
 
     def _date_before_study_start(self, df: pd.DataFrame, field: str) -> list[dict]:
@@ -790,7 +792,7 @@ class EntomologyValidator:
             'date_before_study_start', 'WARNING', field, n,
             f"{n} record(s) have a {field} before the study start date "
             f"({self._study_start.date()}). Examples: {examples}.",
-            _ids(df, before),
+            _clocation(df, before),
         )]
 
     def _field_integer_range(
@@ -812,7 +814,7 @@ class EntomologyValidator:
         return [_issue(
             f'invalid_{field}', severity, field, n,
             f"{n} record(s) have '{field}' outside valid range {lo}–{hi}.",
-            _ids(df, bad),
+            _clocation(df, bad),
         )]
 
     def _numsleepareas_logic(self, df: pd.DataFrame) -> list[dict]:
@@ -828,7 +830,7 @@ class EntomologyValidator:
             issues.append(_issue(
                 'invalid_numsleepareas', 'WARNING', 'numsleepareas', n,
                 f"{n} record(s) have 'numsleepareas' outside valid range 0–20.",
-                _ids(df, bad_range),
+                _clocation(df, bad_range),
             ))
 
         if 'numsleeprooms' in df.columns:
@@ -840,7 +842,7 @@ class EntomologyValidator:
                 issues.append(_issue(
                     'sleepareas_less_than_sleeprooms', 'ERROR', 'numsleepareas', n,
                     f"{n} record(s) have numsleepareas < numsleeprooms.",
-                    _ids(df, bad_logic),
+                    _clocation(df, bad_logic),
                 ))
         return issues
 
@@ -860,7 +862,7 @@ class EntomologyValidator:
         return [_issue(
             'invalid_age', 'ERROR', 'age', n,
             f"{n} record(s) have age outside valid range 0–120.",
-            _ids(df, bad),
+            _clocation(df, bad),
         )]
 
     def _individualnum_sequential(self, df: pd.DataFrame) -> list[dict]:
@@ -883,7 +885,7 @@ class EntomologyValidator:
             'individualnum_not_sequential', 'WARNING', 'individualnum', n,
             f"{len(bad_sessions)} session(s) have individualnum values that are not "
             f"sequential from 1 (gaps or duplicates). Examples: {bad_sessions[:5]}.",
-            _ids(df, bad_mask),
+            _clocation(df, bad_mask),
         )]
 
     def _obs_codes_valid(self, df: pd.DataFrame) -> list[dict]:
@@ -903,7 +905,7 @@ class EntomologyValidator:
                     'invalid_obs_code', 'ERROR', col, n,
                     f"{n} record(s) have an invalid observation code in '{col}': {bad_vals}. "
                     f"Expected: 1–5.",
-                    _ids(df, invalid),
+                    _clocation(df, invalid),
                 ))
         return issues
 
@@ -927,7 +929,7 @@ class EntomologyValidator:
         return [_issue(
             'obs_missing_hours', 'WARNING', 'obs_*', n,
             f"{n} person record(s) have non-trailing null observation hours (gap in sequence).",
-            _ids(df, bad_mask),
+            _clocation(df, bad_mask),
         )]
 
     def _obs_away_entire_night(self, df: pd.DataFrame) -> list[dict]:
@@ -944,7 +946,7 @@ class EntomologyValidator:
         return [_issue(
             'away_entire_night', 'WARNING', 'obs_*', n,
             f"{n} person record(s) were recorded Away OUT for all observation hours.",
-            _ids(df, all_away),
+            _clocation(df, all_away),
         )]
 
     def _obs_asleep_entire_night(self, df: pd.DataFrame) -> list[dict]:
@@ -961,7 +963,7 @@ class EntomologyValidator:
         return [_issue(
             'asleep_entire_night', 'WARNING', 'obs_*', n,
             f"{n} person record(s) were recorded Asleep for all observation hours.",
-            _ids(df, all_asleep),
+            _clocation(df, all_asleep),
         )]
 
     def _obs_transition_net_out_net(self, df: pd.DataFrame) -> list[dict]:
@@ -986,7 +988,7 @@ class EntomologyValidator:
             'obs_transition_net_out_net', 'WARNING', 'obs_*', n,
             f"{n} person record(s) show an Under-net IN → Near net OUT → Under-net IN "
             f"transition across consecutive observation hours.",
-            _ids(df, bad_mask),
+            _clocation(df, bad_mask),
         )]
 
     def _obs_infant_away_night(self, df: pd.DataFrame) -> list[dict]:
@@ -1010,7 +1012,7 @@ class EntomologyValidator:
             'infant_away_night', 'WARNING', 'age', n,
             f"{n} infant record(s) (age < 1) have Away OUT observation during late-night hours "
             f"(9 pm – 6 am).",
-            _ids(df, bad_mask),
+            _clocation(df, bad_mask),
         )]
 
     # ------------------------------------------------------------------
@@ -1047,7 +1049,7 @@ class EntomologyValidator:
             'person_count_vs_numpeople', 'ERROR', 'numpeople', n,
             f"{len(bad_sessions)} session(s) have person record count != numpeople. "
             f"Affected sessions: {bad_sessions[:5]}.",
-            _ids(person_df, bad_mask),
+            _clocation(person_df, bad_mask),
         )]
 
     def _hbo_bednet_under_net_logic(
@@ -1079,7 +1081,7 @@ class EntomologyValidator:
             'under_net_no_bednets', 'ERROR', 'numhangbednets', n,
             f"{n} person record(s) have obs=1 (Under net IN) but the household has "
             f"numhangbednets=0.",
-            _ids(person_df, bad_mask),
+            _clocation(person_df, bad_mask),
         )]
 
     # ------------------------------------------------------------------
@@ -1092,7 +1094,7 @@ class EntomologyValidator:
             return pd.DataFrame(columns=_REPORT_COLS)
         df = pd.DataFrame(issues, columns=_REPORT_COLS)
         df = df.assign(
-            affected_ids=df['affected_ids'].fillna(''),
+            clocation=df['clocation'].fillna(''),
             mrccode=df['mrccode'].fillna(''),
         )
         return df

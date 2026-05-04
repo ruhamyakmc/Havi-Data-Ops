@@ -96,6 +96,18 @@ class BronzeToSilver(BaseStage):
                         f"[{table}] Dedup key '{dedup_key}' not found — skipping dedup."
                     )
 
+                # Apply config-driven exclusion list (child rows only — parent records untouched).
+                exclusions = (self.config.get('exclusions') or {}).get(table, [])
+                if exclusions and 'uniqueid' in df.columns:
+                    excluded_ids = {e['uniqueid'] for e in exclusions if 'uniqueid' in e}
+                    before = len(df)
+                    df = df[~df['uniqueid'].isin(excluded_ids)]
+                    dropped = before - len(df)
+                    if dropped:
+                        logger.info(
+                            f"[{table}] Excluded {dropped} row(s) per config exclusion list."
+                        )
+
                 # Keep source lineage columns in silver; drop only implementation-only fields.
                 df = df.drop(
                     columns=['_source_db'],

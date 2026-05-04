@@ -20,20 +20,6 @@ def _load_sql_files(directory: str) -> list[Path]:
     return sorted(Path(directory).glob('*.sql'))
 
 
-def _country_by_uniqueid(*frames: pd.DataFrame) -> dict[str, str]:
-    lookup: dict[str, str] = {}
-    for df in frames:
-        if 'uniqueid' not in df.columns or 'country' not in df.columns:
-            continue
-        rows = df[['uniqueid', 'country']].dropna()
-        for row in rows.itertuples(index=False):
-            uniqueid = str(row.uniqueid).strip()
-            country = str(row.country).strip()
-            if uniqueid and country:
-                lookup.setdefault(uniqueid, country)
-    return lookup
-
-
 def _single_country(*frames: pd.DataFrame) -> str:
     countries: set[str] = set()
     for df in frames:
@@ -42,12 +28,6 @@ def _single_country(*frames: pd.DataFrame) -> str:
         values = df['country'].dropna().astype(str).str.strip()
         countries.update(v for v in values if v)
     return next(iter(countries)) if len(countries) == 1 else ''
-
-
-def _country_for_issue(affected_ids: object, lookup: dict[str, str], fallback: str) -> str:
-    ids = [part.strip() for part in str(affected_ids or '').split(';')]
-    countries = {lookup[uniqueid] for uniqueid in ids if uniqueid in lookup}
-    return next(iter(countries)) if len(countries) == 1 else fallback
 
 
 class MeasuresHavi(BaseStage):
@@ -105,21 +85,14 @@ class MeasuresHavi(BaseStage):
             if non_empty_reports
             else pd.DataFrame(columns=[
                 'check', 'severity', 'mrccode', 'field',
-                'record_count', 'detail', 'affected_ids',
+                'record_count', 'detail', 'clocation',
             ])
         )
         if 'country' not in full_report.columns:
-            country_lookup = _country_by_uniqueid(
-                collection_df, mosquito_df, assay_df, household_df, person_df
-            )
             fallback_country = _single_country(
                 collection_df, mosquito_df, assay_df, site_df, household_df, person_df
             )
-            full_report = full_report.assign(
-                country=full_report['affected_ids'].map(
-                    lambda value: _country_for_issue(value, country_lookup, fallback_country)
-                )
-            )
+            full_report = full_report.assign(country=fallback_country)
         if 'site' not in full_report.columns:
             site_values = full_report['mrccode'] if 'mrccode' in full_report.columns else ''
             full_report = full_report.assign(site=site_values)

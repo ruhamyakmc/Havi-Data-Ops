@@ -1202,9 +1202,8 @@ class EntomologyValidator:
         if not bad_sessions:
             return []
         bad_mask = person_df['session_id'].fillna('').astype(str).isin(bad_sessions)
-        n = int(bad_mask.sum())
         return [_issue(
-            'person_count_vs_numpeople', 'ERROR', 'numpeople', n,
+            'person_count_vs_numpeople', 'ERROR', 'numpeople', len(bad_sessions),
             f"{len(bad_sessions)} session(s) have person record count != numpeople. "
             f"Affected sessions: {bad_sessions[:5]}.",
             _clocation(person_df, bad_mask),

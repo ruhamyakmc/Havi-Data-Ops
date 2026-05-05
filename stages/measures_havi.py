@@ -20,16 +20,6 @@ def _load_sql_files(directory: str) -> list[Path]:
     return sorted(Path(directory).glob('*.sql'))
 
 
-def _single_country(*frames: pd.DataFrame) -> str:
-    countries: set[str] = set()
-    for df in frames:
-        if 'country' not in df.columns:
-            continue
-        values = df['country'].dropna().astype(str).str.strip()
-        countries.update(v for v in values if v)
-    return next(iter(countries)) if len(countries) == 1 else ''
-
-
 class MeasuresHavi(BaseStage):
     name = 'measures_havi'
     dependencies: list[str] = ['transform_havi']
@@ -56,6 +46,7 @@ class MeasuresHavi(BaseStage):
         raw_codes = trial.get('valid_mrc_codes')
         valid_mrc_codes = set(raw_codes) if raw_codes else None
         study_start_date = trial.get('study_start_date') or None
+        mrc_sites = self.config.get('mrc_sites') or {}
         validator = EntomologyValidator(
             valid_mrc_codes=valid_mrc_codes,
             study_start_date=study_start_date,
@@ -63,14 +54,47 @@ class MeasuresHavi(BaseStage):
         errors: list[str] = []
         all_reports: list[pd.DataFrame] = []
 
+        # Collect mrccodes present across the main entomology and household tables.
+        mrccodes: list[str] = sorted({
+            str(v)
+            for df in [collection_df, household_df]
+            for v in (df['mrccode'].dropna().unique() if 'mrccode' in df.columns else [])
+        })
+
+        def _by_mrc(df: pd.DataFrame, mrc: str) -> pd.DataFrame:
+            if df.empty or 'mrccode' not in df.columns:
+                return df
+            return df[df['mrccode'].astype(str) == mrc]
+
+        def _person_by_mrc(df: pd.DataFrame, hh: pd.DataFrame) -> pd.DataFrame:
+            if df.empty or hh.empty or 'session_id' not in df.columns or 'session_id' not in hh.columns:
+                return df
+            hh_sessions = set(hh['session_id'].dropna().astype(str))
+            return df[df['session_id'].astype(str).isin(hh_sessions)]
+
         try:
-            all_reports.append(validator.validate_collection(collection_df, mosquito_df))
-            all_reports.append(validator.validate_mosquito(mosquito_df, collection_df))
-            if not assay_df.empty:
-                all_reports.append(validator.validate_pheno_assay(assay_df, site_df))
-            if not household_df.empty:
-                all_reports.append(validator.validate_hbo_household(household_df))
-                all_reports.append(validator.validate_hbo_person(person_df, household_df))
+            for mrc in mrccodes:
+                site_collection = _by_mrc(collection_df, mrc)
+                site_mosquito = _by_mrc(mosquito_df, mrc)
+                site_household = _by_mrc(household_df, mrc)
+                site_person = _person_by_mrc(person_df, site_household)
+                site_assay = _by_mrc(assay_df, mrc)
+                site_pheno = _by_mrc(site_df, mrc)
+
+                site_reports: list[pd.DataFrame] = []
+                site_reports.append(validator.validate_collection(site_collection, site_mosquito))
+                site_reports.append(validator.validate_mosquito(site_mosquito, site_collection))
+                if not site_assay.empty:
+                    site_reports.append(validator.validate_pheno_assay(site_assay, site_pheno))
+                if not site_household.empty:
+                    site_reports.append(validator.validate_hbo_household(site_household))
+                    site_reports.append(validator.validate_hbo_person(site_person, site_household))
+
+                for report in site_reports:
+                    if not report.empty:
+                        report['mrccode'] = mrc
+                        all_reports.append(report)
+
         except Exception as exc:
             msg = f"Validation failed: {exc}"
             logger.error(msg)
@@ -79,23 +103,15 @@ class MeasuresHavi(BaseStage):
         if not all_reports:
             return StageResult(success=False, rows_written=0, errors=errors)
 
-        non_empty_reports = [r for r in all_reports if not r.empty]
         full_report = (
-            pd.concat(non_empty_reports, ignore_index=True)
-            if non_empty_reports
+            pd.concat(all_reports, ignore_index=True)
+            if all_reports
             else pd.DataFrame(columns=[
                 'check', 'severity', 'mrccode', 'field',
                 'record_count', 'detail', 'clocation',
             ])
         )
-        if 'country' not in full_report.columns:
-            fallback_country = _single_country(
-                collection_df, mosquito_df, assay_df, site_df, household_df, person_df
-            )
-            full_report = full_report.assign(country=fallback_country)
-        if 'site' not in full_report.columns:
-            site_values = full_report['mrccode'] if 'mrccode' in full_report.columns else ''
-            full_report = full_report.assign(site=site_values)
+        full_report['site'] = full_report['mrccode'].astype(str).map(mrc_sites).fillna('')
 
         with self.engine.begin() as conn:
             full_report.to_sql(

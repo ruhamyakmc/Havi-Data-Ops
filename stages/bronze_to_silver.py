@@ -84,7 +84,24 @@ class BronzeToSilver(BaseStage):
 
                 logger.info(f"[{table}] {len(bronze_df)} bronze rows.")
 
-                df = DataCleaner(bronze_df.copy()).drop_exact_duplicates()
+                df = bronze_df.copy()
+
+                # Apply config-driven session_id corrections before dedup.
+                corrections = (self.config.get('session_id_corrections') or {}).get(table, [])
+                if corrections and 'session_id' in df.columns:
+                    for correction in corrections:
+                        mask = df['session_id'].astype(str) == correction['session_id']
+                        if 'clocation' in correction and 'clocation' in df.columns:
+                            mask &= df['clocation'].astype(str) == str(correction['clocation'])
+                        n = int(mask.sum())
+                        if n:
+                            df.loc[mask, 'session_id'] = correction['correct_session_id']
+                            logger.info(
+                                f"[{table}] Corrected {n} row(s): session_id "
+                                f"'{correction['session_id']}' → '{correction['correct_session_id']}'."
+                            )
+
+                df = DataCleaner(df).drop_exact_duplicates()
 
                 table_key = primary_key_columns(table)
                 if table_key != [dedup_key]:

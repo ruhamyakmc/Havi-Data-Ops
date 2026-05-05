@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_VALID_MRC_CODES: frozenset[int] = frozenset(
     {12, 23, 25, 29, 31, 36, 37, 40, 42, 47, 56, 59, 62, 64, 66, 69, 70}
 )
-_BARCODE_RE = re.compile(r'^H26-[A-Z0-9]+-\d{4}$', re.IGNORECASE)
+_BARCODE_RE = re.compile(r'^H26-[A-Z0-9]+-\d{4}$')
 
 _CLOCATION_MAP = {1: 'outdoor', 2: 'indoor'}
 
@@ -131,7 +131,8 @@ def _clocation(df: pd.DataFrame, mask) -> str:
         vals = pd.to_numeric(df.loc[mask, 'clocation'], errors='coerce').dropna().astype(int).unique()
         labels = sorted({_CLOCATION_MAP.get(v, str(v)) for v in vals})
         return ' & '.join(labels)
-    except Exception:
+    except Exception as exc:
+        logger.warning("_clocation() failed: %s", exc)
         return ''
 
 
@@ -206,6 +207,8 @@ class EntomologyValidator:
         issues += self._duplicate_collection_key(collection_df)
         issues += self._duplicate_session_datasource(collection_df)
         issues += self._device_record_count(collection_df)
+        issues += self._collection_date_consistency(collection_df)
+        issues += self._count_outliers(collection_df)
         issues += self._sparse_columns(collection_df)
         return self._to_df(issues)
 
@@ -218,6 +221,7 @@ class EntomologyValidator:
         issues: list[dict] = []
         issues += self._required_fields(mosquito_df, _MOSQUITO_REQUIRED)
         issues += self._orphan_records(mosquito_df, collection_df, 'session_id', 'orphan_mosquito')
+        issues += self._clocation_vs_parent(mosquito_df, collection_df)
         issues += self._code_validity(mosquito_df, 'chour', set(range(1, 19)), 'invalid_chour',
                                        '1-18')
         issues += self._code_validity(mosquito_df, 'grossspecies', set(range(1, 10)),
@@ -329,6 +333,63 @@ class EntomologyValidator:
             _clocation(df, col[dup].index),
         )]
 
+    def _clocation_vs_parent(
+        self,
+        mosquito_df: pd.DataFrame,
+        collection_df: pd.DataFrame,
+    ) -> list[dict]:
+        """Check that each mosquito record's clocation matches its parent collection record.
+
+        Mosquito records with NULL clocation are also flagged — they are untagged
+        as indoor/outdoor and cannot be used in downstream analysis.
+        """
+        if 'session_id' not in mosquito_df.columns or mosquito_df.empty:
+            return []
+        if 'session_id' not in collection_df.columns or 'clocation' not in collection_df.columns:
+            return []
+        if 'clocation' not in mosquito_df.columns:
+            return []
+
+        # Build a session_id → clocation lookup from the parent collection.
+        parent_loc = (
+            collection_df[['session_id', 'clocation']]
+            .dropna(subset=['session_id'])
+            .drop_duplicates(subset=['session_id'])
+            .set_index('session_id')['clocation']
+            .astype(str)
+        )
+
+        merged = mosquito_df[['session_id', 'clocation']].copy()
+        merged['session_id_str'] = merged['session_id'].fillna('').astype(str)
+        merged['parent_clocation'] = merged['session_id_str'].map(parent_loc)
+
+        # NULL clocation on mosquito record.
+        null_mask = merged['clocation'].isna() & merged['parent_clocation'].notna()
+        # clocation present but mismatched with parent.
+        mismatch_mask = (
+            merged['clocation'].notna()
+            & merged['parent_clocation'].notna()
+            & (merged['clocation'].astype(str) != merged['parent_clocation'])
+        )
+
+        issues = []
+        n_null = int(null_mask.sum())
+        if n_null:
+            issues.append(_issue(
+                'mosquito_clocation_null', 'WARNING', 'clocation', n_null,
+                f"{n_null} mosquito record(s) have no clocation — "
+                f"indoor/outdoor assignment cannot be determined.",
+            ))
+        n_mismatch = int(mismatch_mask.sum())
+        if n_mismatch:
+            issues.append(_issue(
+                'mosquito_clocation_mismatch', 'ERROR', 'clocation', n_mismatch,
+                f"{n_mismatch} mosquito record(s) have a clocation that differs "
+                f"from their parent collection record.",
+                _clocation(mosquito_df, mismatch_mask),
+            ))
+        return issues
+
     def _duplicate_collection_key(self, df: pd.DataFrame) -> list[dict]:
         key_cols = ['uniqueid', 'clocation']
         if any(col not in df.columns for col in key_cols):
@@ -384,7 +445,7 @@ class EntomologyValidator:
         n = int(invalid.sum())
         if not n:
             return []
-        bad_vals = sorted(int(v) for v in numeric[invalid].unique())
+        bad_vals = sorted(v if v != int(v) else int(v) for v in numeric[invalid].unique())
         return [_issue(
             check_name, 'ERROR', field, n,
             f"{n} record(s) have an invalid '{field}' code: {bad_vals}. "
@@ -421,7 +482,7 @@ class EntomologyValidator:
         n = int(invalid.sum())
         if not n:
             return []
-        bad_vals = sorted(int(v) for v in numeric[invalid].unique())
+        bad_vals = sorted(v if v != int(v) else int(v) for v in numeric[invalid].unique())
         return [_issue(
             'invalid_mrccode', 'ERROR', 'mrccode', n,
             f"{n} record(s) have an unrecognised mrccode: {bad_vals}. "
@@ -525,12 +586,32 @@ class EntomologyValidator:
         if 'clocation' in collection_df.columns and 'clocation' in mosquito_df.columns:
             key_cols.append('clocation')
 
+        # Flag sessions where session_id appears more than once without clocation to
+        # disambiguate — count validation cannot be performed reliably for these.
         ambiguous_sessions: set[str] = set()
         if key_cols == ['session_id']:
             duplicated = collection_df['session_id'].fillna('').astype(str).duplicated(keep=False)
             ambiguous_sessions = set(
                 collection_df.loc[duplicated, 'session_id'].dropna().astype(str)
             )
+        if ambiguous_sessions:
+            issues.append(_issue(
+                'ambiguous_session', 'WARNING', 'session_id', len(ambiguous_sessions),
+                f"{len(ambiguous_sessions)} session(s) have duplicate session_id without "
+                f"clocation to disambiguate — count validation skipped for these. "
+                f"Examples: {sorted(ambiguous_sessions)[:5]}.",
+            ))
+
+        # Flag collection records where numfanoph is NULL — cannot validate child counts.
+        null_declared = collection_df['numfanoph'].isna() if 'numfanoph' in collection_df.columns else pd.Series([], dtype=bool)
+        n_null = int(null_declared.sum())
+        if n_null:
+            issues.append(_issue(
+                'null_declared_count', 'WARNING', 'numfanoph', n_null,
+                f"{n_null} collection record(s) have a NULL numfanoph — "
+                f"declared mosquito count is missing.",
+                _clocation(collection_df, null_declared),
+            ))
 
         mosq_counts = pd.Series(dtype='int64')
         if not mosquito_df.empty and all(col in mosquito_df.columns for col in key_cols):
@@ -644,6 +725,83 @@ class EntomologyValidator:
             f"{len(low)} device file(s) contributed <= 2 records: {low.index.tolist()}.",
         )]
 
+
+    def _collection_date_consistency(self, df: pd.DataFrame) -> list[dict]:
+        """Check that all households at the site were collected on the same nights.
+
+        Each site visit consists of two consecutive collection nights, and all 6
+        households should be present on both nights. A household missing from a
+        date where others were collected is flagged as a WARNING.
+        """
+        date_col = 'collection_date' if 'collection_date' in df.columns else 'dateofcollection'
+        if 'hhid' not in df.columns or date_col not in df.columns:
+            return []
+
+        work = df[['hhid', date_col]].copy()
+        work[date_col] = pd.to_datetime(work[date_col], errors='coerce')
+        work = work.dropna(subset=[date_col])
+        if work.empty:
+            return []
+
+        # One row per (hhid, date) regardless of indoor/outdoor.
+        present = work.drop_duplicates(subset=['hhid', date_col])
+        all_hhids = set(present['hhid'].astype(str))
+        issues = []
+
+        for date, grp in present.groupby(date_col):
+            date_hhids = set(grp['hhid'].astype(str))
+            missing = sorted(all_hhids - date_hhids)
+            if missing:
+                issues.append(_issue(
+                    'missing_collection_night', 'WARNING', date_col, len(missing),
+                    f"{len(missing)} household(s) missing from collection on "
+                    f"{pd.Timestamp(date).date()}: {missing}.",
+                ))
+        return issues
+
+    def _count_outliers(self, df: pd.DataFrame) -> list[dict]:
+        """Flag collection records with outlier mosquito counts using the IQR method.
+
+        Checks numfanoph, nummanoph, and numculex separately within each clocation
+        (outdoor/indoor), since the two settings have different catch distributions.
+        Flags records above Q3 + 1.5 × IQR as warnings.
+        """
+        if df.empty:
+            return []
+        issues = []
+        clocation_col = df['clocation'] if 'clocation' in df.columns else pd.Series('', index=df.index)
+        for loc_val, loc_label in [('1', 'outdoor'), ('2', 'indoor')]:
+            loc_mask = clocation_col.astype(str) == loc_val
+            loc_df = df[loc_mask]
+            if loc_df.empty:
+                continue
+            for field in ('numfanoph', 'nummanoph', 'numculex'):
+                if field not in loc_df.columns:
+                    continue
+                numeric = pd.to_numeric(loc_df[field], errors='coerce')
+                valid = numeric.dropna()
+                if len(valid) < 4:
+                    continue
+                q1, q3 = valid.quantile(0.25), valid.quantile(0.75)
+                iqr = q3 - q1
+                if iqr == 0:
+                    continue
+                upper = q3 + 1.5 * iqr
+                outlier_mask = loc_mask & numeric.notna() & (numeric > upper)
+                n = int(outlier_mask.sum())
+                if not n:
+                    continue
+                examples = sorted(
+                    numeric[outlier_mask[loc_mask]].unique().astype(int).tolist(),
+                    reverse=True,
+                )[:5]
+                issues.append(_issue(
+                    'count_outlier', 'WARNING', field, n,
+                    f"{n} {loc_label} record(s) have an unusually high '{field}' count "
+                    f"(> {upper:.0f}, IQR upper fence). Examples: {examples}.",
+                    loc_label,
+                ))
+        return issues
 
     # ------------------------------------------------------------------
     # ento_mosquito-specific checks
@@ -900,7 +1058,7 @@ class EntomologyValidator:
             invalid = has_val & ~numeric.isin(valid_codes)
             n = int(invalid.sum())
             if n:
-                bad_vals = sorted(int(v) for v in numeric[invalid].unique())
+                bad_vals = sorted(v if v != int(v) else int(v) for v in numeric[invalid].unique())
                 issues.append(_issue(
                     'invalid_obs_code', 'ERROR', col, n,
                     f"{n} record(s) have an invalid observation code in '{col}': {bad_vals}. "

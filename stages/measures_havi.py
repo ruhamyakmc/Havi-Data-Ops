@@ -112,6 +112,7 @@ class MeasuresHavi(BaseStage):
             ])
         )
         full_report['site'] = full_report['mrccode'].astype(str).map(mrc_sites).fillna('')
+        full_report = full_report[['check', 'severity', 'site', 'mrccode', 'field', 'record_count', 'detail', 'clocation']]
 
         with self.engine.begin() as conn:
             full_report.to_sql(

@@ -4,3 +4,4 @@ paramiko==4.0.0
 sqlalchemy==2.0.49
 psycopg2-binary==2.9.11
 pytest==9.0.3
+boxsdk[jwt]==3.9.2

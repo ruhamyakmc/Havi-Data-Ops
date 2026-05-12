@@ -20,6 +20,7 @@ from modules.migrations import run_migrations
 from modules.notifier import send_pipeline_report
 from stages.base import StageResult
 from stages.bronze_to_silver import BronzeToSilver
+from stages.export_box import ExportBox
 from stages.ftp_to_extracted import FtpToExtracted
 from stages.measures_havi import MeasuresHavi
 from stages.promote_havi import PromoteHavi
@@ -42,6 +43,11 @@ STAGE_CLASSES = {
 }
 
 STAGE_DEPS = {name: cls.dependencies for name, cls in STAGE_CLASSES.items()}
+
+# Stages excluded from -a (all stages) — must be triggered manually with -p.
+MANUAL_STAGE_CLASSES = {
+    'export_box': ExportBox,
+}
 
 
 def topological_sort(deps: dict[str, list[str]]) -> list[str]:
@@ -76,8 +82,9 @@ def build_run_list(
 ) -> list[str]:
     if run_all:
         return topological_sort(deps)
-    if pipeline not in deps:
-        logger.error(f"Unknown stage '{pipeline}'. Valid stages: {sorted(deps)}")
+    all_known = {**STAGE_CLASSES, **MANUAL_STAGE_CLASSES}
+    if pipeline not in all_known:
+        logger.error(f"Unknown stage '{pipeline}'. Valid stages: {sorted(all_known)}")
         sys.exit(1)
     return [pipeline]
 
@@ -88,8 +95,9 @@ def run_pipeline(stages: list[str], config: ConfigLoader, engine) -> None:
     run_id = str(uuid.uuid4())
     started_at = datetime.now(timezone.utc)
 
+    all_classes = {**STAGE_CLASSES, **MANUAL_STAGE_CLASSES}
     for name in stages:
-        cls = STAGE_CLASSES[name]
+        cls = all_classes[name]
         blocked_by = [d for d in cls.dependencies if d in failed]
         if blocked_by:
             logger.warning(f"Skipping '{name}' — upstream failure(s): {blocked_by}")

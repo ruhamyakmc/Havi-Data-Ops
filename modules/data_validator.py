@@ -360,8 +360,8 @@ class EntomologyValidator:
         )
 
         merged = mosquito_df[['session_id', 'clocation']].copy()
-        merged['session_id_str'] = merged['session_id'].fillna('').astype(str)
-        merged['parent_clocation'] = merged['session_id_str'].map(parent_loc)
+        merged.loc[:, 'session_id_str'] = merged['session_id'].fillna('').astype(str)
+        merged.loc[:, 'parent_clocation'] = merged['session_id_str'].map(parent_loc)
 
         # NULL clocation on mosquito record.
         null_mask = merged['clocation'].isna() & merged['parent_clocation'].notna()
@@ -727,78 +727,92 @@ class EntomologyValidator:
 
 
     def _collection_date_consistency(self, df: pd.DataFrame) -> list[dict]:
-        """Check that all households at the site were collected on the same nights.
+        """Check that all households collected in the same ISO week are present on
+        both collection nights.
 
-        Each site visit consists of two consecutive collection nights, and all 6
-        households should be present on both nights. A household missing from a
-        date where others were collected is flagged as a WARNING.
+        Each site visit consists of two consecutive collection nights per week, and
+        all households in that week's round should appear on both nights. Households
+        from different weeks are not compared against each other.
         """
         date_col = 'collection_date' if 'collection_date' in df.columns else 'dateofcollection'
         if 'hhid' not in df.columns or date_col not in df.columns:
             return []
 
         work = df[['hhid', date_col]].copy()
-        work[date_col] = pd.to_datetime(work[date_col], errors='coerce')
+        work.loc[:, date_col] = pd.to_datetime(work[date_col], errors='coerce')
         work = work.dropna(subset=[date_col])
         if work.empty:
             return []
 
         # One row per (hhid, date) regardless of indoor/outdoor.
         present = work.drop_duplicates(subset=['hhid', date_col])
-        all_hhids = set(present['hhid'].astype(str))
+        present = present.copy()
+        dates = pd.to_datetime(present[date_col], errors='coerce')
+        iso = dates.dt.isocalendar()
+        present['iso_year'] = iso['year'].values
+        present['iso_week'] = iso['week'].values
         issues = []
 
-        for date, grp in present.groupby(date_col):
-            date_hhids = set(grp['hhid'].astype(str))
-            missing = sorted(all_hhids - date_hhids)
-            if missing:
-                issues.append(_issue(
-                    'missing_collection_night', 'WARNING', date_col, len(missing),
-                    f"{len(missing)} household(s) missing from collection on "
-                    f"{pd.Timestamp(date).date()}: {missing}.",
-                ))
+        for (iso_year, iso_week), week_grp in present.groupby(['iso_year', 'iso_week']):
+            week_hhids = set(week_grp['hhid'].astype(str))
+            for date, date_grp in week_grp.groupby(date_col):
+                date_hhids = set(date_grp['hhid'].astype(str))
+                missing = sorted(week_hhids - date_hhids)
+                if missing:
+                    issues.append(_issue(
+                        'missing_collection_night', 'WARNING', date_col, len(missing),
+                        f"{len(missing)} household(s) missing from collection on "
+                        f"{pd.Timestamp(date).date()} (week {iso_week}): {missing}.",
+                    ))
         return issues
 
     def _count_outliers(self, df: pd.DataFrame) -> list[dict]:
         """Flag collection records with outlier mosquito counts using the IQR method.
 
-        Checks numfanoph, nummanoph, and numculex separately within each clocation
-        (outdoor/indoor), since the two settings have different catch distributions.
+        Checks numfanoph, nummanoph, and numculex separately within each household +
+        clocation group. Requires at least 10 records per household per location before
+        the IQR fence is applied — with fewer nights the distribution is too sparse for
+        outlier detection to be meaningful.
         Flags records above Q3 + 1.5 × IQR as warnings.
         """
         if df.empty:
             return []
+        if 'hhid' not in df.columns or 'clocation' not in df.columns:
+            return []
         issues = []
-        clocation_col = df['clocation'] if 'clocation' in df.columns else pd.Series('', index=df.index)
         for loc_val, loc_label in [('1', 'outdoor'), ('2', 'indoor')]:
-            loc_mask = clocation_col.astype(str) == loc_val
-            loc_df = df[loc_mask]
+            loc_mask = df['clocation'].astype(str) == loc_val
+            loc_df = df[loc_mask].copy()
             if loc_df.empty:
                 continue
             for field in ('numfanoph', 'nummanoph', 'numculex'):
                 if field not in loc_df.columns:
                     continue
                 numeric = pd.to_numeric(loc_df[field], errors='coerce')
-                valid = numeric.dropna()
-                if len(valid) < 4:
-                    continue
-                q1, q3 = valid.quantile(0.25), valid.quantile(0.75)
-                iqr = q3 - q1
-                if iqr == 0:
-                    continue
-                upper = q3 + 1.5 * iqr
-                outlier_mask = loc_mask & numeric.notna() & (numeric > upper)
-                n = int(outlier_mask.sum())
+                loc_df = loc_df.assign(_val=numeric)
+                outlier_indices: list = []
+                for hhid, hh_grp in loc_df.groupby('hhid'):
+                    valid = hh_grp['_val'].dropna()
+                    if len(valid) < 10:
+                        continue
+                    q1, q3 = valid.quantile(0.25), valid.quantile(0.75)
+                    iqr = q3 - q1
+                    if iqr == 0:
+                        continue
+                    upper = q3 + 1.5 * iqr
+                    outliers = hh_grp.index[hh_grp['_val'].notna() & (hh_grp['_val'] > upper)]
+                    outlier_indices.extend(outliers.tolist())
+                n = len(outlier_indices)
                 if not n:
                     continue
                 examples = sorted(
-                    numeric[outlier_mask[loc_mask]].unique().astype(int).tolist(),
+                    numeric[outlier_indices].dropna().unique().astype(int).tolist(),
                     reverse=True,
                 )[:5]
                 issues.append(_issue(
                     'count_outlier', 'WARNING', field, n,
                     f"{n} {loc_label} record(s) have an unusually high '{field}' count "
-                    f"(> {upper:.0f}, IQR upper fence). Examples: {examples}.",
+                    f"(IQR upper fence, per household). Examples: {examples}.",
                     loc_label,
                 ))
         return issues
@@ -1033,6 +1047,11 @@ class EntomologyValidator:
             if sess_id == '':
                 continue
             nums = sorted(grp['_indnum'].dropna().astype(int).tolist())
+            if not nums:
+                continue
+            # All identical (e.g. all = 1) is a device bug corrected in gold — skip.
+            if len(set(nums)) == 1 and len(nums) > 1:
+                continue
             if nums != list(range(1, len(nums) + 1)):
                 bad_sessions.append(sess_id)
         if not bad_sessions:

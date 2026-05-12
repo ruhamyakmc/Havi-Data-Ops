@@ -96,9 +96,15 @@ class BronzeToSilver(BaseStage):
                         n = int(mask.sum())
                         if n:
                             df.loc[mask, 'session_id'] = correction['correct_session_id']
+                            for field, value in (correction.get('correct_fields') or {}).items():
+                                if field in df.columns:
+                                    df.loc[mask, field] = value
+                            corrected_fields = list(correction.get('correct_fields') or {})
+                            extra = f", also correcting {corrected_fields}" if corrected_fields else ""
                             logger.info(
                                 f"[{table}] Corrected {n} row(s): session_id "
-                                f"'{correction['session_id']}' → '{correction['correct_session_id']}'."
+                                f"'{correction['session_id']}' → '{correction['correct_session_id']}'"
+                                f"{extra}."
                             )
 
                 df = DataCleaner(df).drop_exact_duplicates()
@@ -113,6 +119,22 @@ class BronzeToSilver(BaseStage):
                         f"[{table}] Dedup key '{dedup_key}' not found — skipping dedup."
                     )
 
+                # Apply config-driven record-level corrections (by uniqueid).
+                record_corrections = (self.config.get('record_corrections') or {}).get(table, [])
+                if record_corrections and 'uniqueid' in df.columns:
+                    for rc in record_corrections:
+                        mask = df['uniqueid'].astype(str) == rc['uniqueid']
+                        n = int(mask.sum())
+                        if n:
+                            for field, value in (rc.get('correct_fields') or {}).items():
+                                if field in df.columns:
+                                    df.loc[mask, field] = value
+                            corrected_fields = list(rc.get('correct_fields') or {})
+                            logger.info(
+                                f"[{table}] Record correction for uniqueid '{rc['uniqueid']}': "
+                                f"corrected {corrected_fields}."
+                            )
+
                 # Apply config-driven exclusion list (child rows only — parent records untouched).
                 exclusions = (self.config.get('exclusions') or {}).get(table, [])
                 if exclusions and 'uniqueid' in df.columns:
@@ -125,11 +147,6 @@ class BronzeToSilver(BaseStage):
                             f"[{table}] Excluded {dropped} row(s) per config exclusion list."
                         )
 
-                # Keep source lineage columns in silver; drop only implementation-only fields.
-                df = df.drop(
-                    columns=['_source_db'],
-                    errors='ignore',
-                )
                 cleaned_tables[table] = df
 
             except Exception as exc:

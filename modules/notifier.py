@@ -152,12 +152,6 @@ def _send(
         smtp.sendmail(email_cfg['sender'], recipients, msg.as_string())
 
 
-def _filter_report_for_country(report_df: pd.DataFrame, country: str) -> pd.DataFrame:
-    if 'country' not in report_df.columns:
-        return report_df
-    return report_df[report_df['country'].astype(str).str.lower() == country.lower()]
-
-
 def send_pipeline_report(
     results: dict[str, StageResult],
     stages: list[str],
@@ -183,13 +177,6 @@ def send_pipeline_report(
             if report_df is not None else warnings_df
         )
 
-    notify_countries = email_cfg.get('notify_countries')
-    if notify_countries and report_df is not None and 'country' in report_df.columns:
-        wanted = [c.lower() for c in notify_countries]
-        report_df = report_df[
-            report_df['country'].astype(str).str.lower().isin(wanted)
-        ]
-
     has_failures = any(not r.success for r in results.values())
     today = date.today().strftime('%d %b %Y')
     stage_section = _build_stage_summary(results, stages)
@@ -205,24 +192,18 @@ def send_pipeline_report(
         except Exception as exc:
             logger.error('Notifier failed for pipeline recipients: %s', exc)
 
-    field_recipients_cfg = email_cfg.get('field_recipients', {})
-    if not isinstance(field_recipients_cfg, dict) or report_df is None or report_df.empty:
+    field_recipients = email_cfg.get('field_recipients', [])
+    if not field_recipients or report_df is None or report_df.empty:
         return
     if 'severity' not in report_df.columns or not report_df['severity'].isin(['ERROR', 'WARNING']).any():
         return
 
-    for country, recipients in field_recipients_cfg.items():
-        if not recipients:
-            continue
-        country_df = _filter_report_for_country(report_df, country)
-        if country_df.empty or not country_df['severity'].isin(['ERROR', 'WARNING']).any():
-            continue
-        subject = f'HAVI Data Quality - {country.title()} issues found ({today})'
-        validation_section = _build_validation_summary(country_df)
-        plain = f'{stage_section}\n\n{validation_section}'
-        html = f'<pre style="font-family:monospace;font-size:13px">{_html.escape(plain)}</pre>'
-        try:
-            _send(email_cfg, recipients, subject, plain, html, attachment_df=country_df)
-            logger.info('Field quality report (%s) sent to %s.', country, recipients)
-        except Exception as exc:
-            logger.error('Notifier failed for field recipients %s: %s', country, exc)
+    validation_section = _build_validation_summary(report_df)
+    subject = f'HAVI Data Quality - issues found ({today})'
+    plain = f'{stage_section}\n\n{validation_section}'
+    html = f'<pre style="font-family:monospace;font-size:13px">{_html.escape(plain)}</pre>'
+    try:
+        _send(email_cfg, field_recipients, subject, plain, html, attachment_df=report_df)
+        logger.info('Field quality report sent to %s.', field_recipients)
+    except Exception as exc:
+        logger.error('Notifier failed for field recipients %s: %s', field_recipients, exc)

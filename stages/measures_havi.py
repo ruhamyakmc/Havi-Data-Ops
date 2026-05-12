@@ -100,9 +100,6 @@ class MeasuresHavi(BaseStage):
             logger.error(msg)
             errors.append(msg)
 
-        if not all_reports:
-            return StageResult(success=False, rows_written=0, errors=errors)
-
         full_report = (
             pd.concat(all_reports, ignore_index=True)
             if all_reports

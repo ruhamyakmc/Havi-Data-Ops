@@ -86,8 +86,10 @@ class ExportVisits(BaseStage):
                     )
 
                     # Apply first-n-nights filter independently per datasource so
-                    # aspirations dates (later in calendar) are not ranked against HLC nights
-                    date_col = 'starttime' if 'starttime' in ds_collection.columns else 'dateofcollection'
+                    # aspirations dates (later in calendar) are not ranked against HLC nights.
+                    # Use dateofcollection (canonical night date) — starttime spans midnight
+                    # so indoor morning records would get a different calendar date.
+                    date_col = 'dateofcollection' if 'dateofcollection' in ds_collection.columns else 'starttime'
                     mask = _first_n_sessions(ds_collection, date_col, n)
                     ds_collection = ds_collection[mask].copy()
 

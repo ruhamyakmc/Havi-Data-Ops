@@ -114,10 +114,7 @@ def _make_email_cfg(tmp_path):
         'sender': 'havi@example.com',
         'smtp_username': 'user@example.com',
         'pipeline_recipients': ['admin@example.com'],
-        'field_recipients': {
-            'uganda': ['ug-team@example.com'],
-            'kenya': ['ke-team@example.com'],
-        },
+        'field_recipients': ['ug-team@example.com'],
         'keyfiles': {
             'smtp_ini': str(ini_file),
             'smtp_key': str(key_file),
@@ -191,15 +188,17 @@ def test_send_pipeline_report_field_email_sent_on_issues(tmp_path):
     with patch('modules.notifier._query_validation_report', return_value=report):
         with patch('smtplib.SMTP') as mock_smtp_cls:
             mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
-            send_pipeline_report(
-                results=results, stages=['sqlite_to_bronze'],
-                engine=MagicMock(), config=config,
-            )
+            with patch('modules.notifier.date') as mock_date:
+                mock_date.today.return_value.weekday.return_value = 4  # Friday
+                mock_date.today.return_value.strftime.return_value = '2026-06-05'
+                send_pipeline_report(
+                    results=results, stages=['sqlite_to_bronze'],
+                    engine=MagicMock(), config=config,
+                )
 
     recipients_seen = [call[1] for call in sendmail_calls]
     assert ['admin@example.com'] in recipients_seen
     assert ['ug-team@example.com'] in recipients_seen
-    assert ['ke-team@example.com'] not in recipients_seen
 
 
 def test_send_pipeline_report_does_not_raise_on_smtp_error(tmp_path):

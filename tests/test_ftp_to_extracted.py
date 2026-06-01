@@ -48,7 +48,7 @@ def test_skips_already_downloaded_archive(tmp_path):
     with patch('stages.ftp_to_extracted.get_decrypted_password', return_value='s'):
         with patch('stages.ftp_to_extracted.SFTPClient',
                    return_value=_mock_sftp(['havi_entomology_109_2026-04-29_11_00.zip'])):
-            with patch('stages.ftp_to_extracted.select_latest_remote_per_device',
+            with patch('stages.ftp_to_extracted.select_files_for_download',
                        return_value={'109': 'havi_entomology_109_2026-04-29_11_00.zip'}):
                 with patch('stages.ftp_to_extracted.get_country_paths', return_value={
                     'extract_path': str(extract_dir),

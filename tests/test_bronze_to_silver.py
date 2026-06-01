@@ -75,7 +75,7 @@ def test_ent_collection_dedup_keeps_indoor_and_outdoor_same_uniqueid():
     assert {
         'run_uuid', 'file_name', 'file_path', 'extracted_at', 'country', 'community',
     }.issubset(writes['_stage_ento_collection'].columns)
-    assert '_source_db' not in writes['_stage_ento_collection'].columns
+    assert 'session_id' in writes['_stage_ento_collection'].columns
 
 
 def test_empty_table_is_skipped():

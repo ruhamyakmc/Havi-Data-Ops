@@ -85,12 +85,39 @@ class _CollectionChecks:
             return []
 
         issues = []
-        key_cols = ['session_id']
-        if 'clocation' in collection_df.columns and 'clocation' in mosquito_df.columns:
-            key_cols.append('clocation')
 
+        # datasource=2 (Indoor Aspirations) has no clocation by design — match on session_id only.
+        # All other records use the composite session_id+clocation key.
+        has_datasource = 'datasource' in collection_df.columns
+        is_ds2 = (
+            collection_df['datasource'].astype(str) == '2'
+            if has_datasource
+            else pd.Series(False, index=collection_df.index)
+        )
+        use_composite = (
+            'clocation' in collection_df.columns and 'clocation' in mosquito_df.columns
+        )
+
+        # Mosquito counts by session_id alone (used for datasource=2)
+        mosq_counts_sid: pd.Series = pd.Series(dtype='int64')
+        if not mosquito_df.empty and 'session_id' in mosquito_df.columns:
+            mosq_counts_sid = mosquito_df['session_id'].dropna().astype(str).value_counts()
+
+        # Mosquito counts by composite key session_id|clocation (used for datasource=1/unknown)
+        mosq_counts_composite: pd.Series = pd.Series(dtype='int64')
+        if use_composite and not mosquito_df.empty:
+            mosquito_keys = (
+                mosquito_df[['session_id', 'clocation']]
+                .fillna('').astype(str)
+                .agg('|'.join, axis=1)
+            )
+            mosq_counts_composite = (
+                mosquito_keys[mosquito_keys.str.strip('|') != ''].value_counts()
+            )
+
+        # Warn about ambiguous sessions only when no clocation column exists
         ambiguous_sessions: set[str] = set()
-        if key_cols == ['session_id']:
+        if not use_composite:
             duplicated = collection_df['session_id'].fillna('').astype(str).duplicated(keep=False)
             ambiguous_sessions = set(
                 collection_df.loc[duplicated, 'session_id'].dropna().astype(str)
@@ -113,32 +140,36 @@ class _CollectionChecks:
                 _clocation(collection_df, null_declared),
             ))
 
-        mosq_counts = pd.Series(dtype='int64')
-        if not mosquito_df.empty and all(col in mosquito_df.columns for col in key_cols):
-            if key_cols == ['session_id']:
-                mosq_counts = mosquito_df['session_id'].dropna().astype(str).value_counts()
-            else:
-                mosquito_keys = mosquito_df[key_cols].fillna('').astype(str).agg('|'.join, axis=1)
-                mosq_counts = mosquito_keys[mosquito_keys.str.strip('|') != ''].value_counts()
-
         counts = collection_df.copy(deep=True)
         if ambiguous_sessions:
             counts = counts[
                 ~counts['session_id'].fillna('').astype(str).isin(ambiguous_sessions)
             ].copy()
+            is_ds2 = is_ds2.loc[counts.index]
+
         counts = counts.assign(
             session_id_str=counts['session_id'].fillna('').astype(str),
             declared_count=pd.to_numeric(counts['numfanoph'], errors='coerce').fillna(0),
         )
-        if key_cols == ['session_id']:
-            counts = counts.assign(child_count_key=counts['session_id_str'])
-        else:
+
+        # Assign lookup key: ds2 rows use session_id; HLC rows use composite key
+        if use_composite:
+            composite_key = counts[['session_id', 'clocation']].fillna('').astype(str).agg('|'.join, axis=1)
             counts = counts.assign(
-                child_count_key=counts[key_cols].fillna('').astype(str).agg('|'.join, axis=1)
+                child_count_key=composite_key.where(~is_ds2, counts['session_id_str'])
             )
-        counts = counts.assign(
-            actual_count=counts['child_count_key'].map(mosq_counts).fillna(0).astype(int)
-        )
+        else:
+            counts = counts.assign(child_count_key=counts['session_id_str'])
+
+        # Vectorised lookup: ds2 rows use session_id counts, HLC rows use composite counts
+        sid_looked_up = counts['session_id_str'].map(mosq_counts_sid).fillna(0).astype(int)
+        if use_composite:
+            composite_looked_up = counts['child_count_key'].map(mosq_counts_composite).fillna(0).astype(int)
+            is_ds2_aligned = is_ds2.reindex(counts.index, fill_value=False)
+            actual = composite_looked_up.where(~is_ds2_aligned, sid_looked_up)
+        else:
+            actual = sid_looked_up
+        counts = counts.assign(actual_count=actual)
         if 'uniqueid' not in counts.columns:
             counts['uniqueid'] = ''
 

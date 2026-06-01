@@ -176,6 +176,21 @@ def test_child_count_uses_clocation_specific_session_id():
     assert report[report['check'] == 'missing_child_records'].empty
 
 
+def test_child_count_datasource2_matches_on_session_id_only():
+    """datasource=2 collection records have clocation=NULL; match mosquitoes by session_id alone."""
+    df = _collection(
+        datasource=['2'],
+        clocation=[None],
+        numfanoph=['3'],
+    )
+    mosq = pd.concat([
+        _mosquito(session_id='sess1', n=3).assign(clocation=None),
+    ], ignore_index=True)
+    report = V.validate_collection(df, mosq)
+    assert report[report['check'] == 'missing_child_records'].empty
+    assert report[report['check'] == 'count_mismatch'].empty
+
+
 # ── mosquito checks ───────────────────────────────────────────────────────────
 
 def test_orphan_mosquito_record():

@@ -20,6 +20,8 @@ invoke==3.0.3
     # via paramiko
 numpy==2.2.5
     # via pandas
+openpyxl==3.1.5
+    # via -r requirements.in
 packaging==26.0
     # via pytest
 pandas==2.2.3

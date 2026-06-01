@@ -20,14 +20,47 @@ class DataCleaner:
         Return a new DataFrame with exact duplicate rows removed.
         Does NOT mutate self.df — the original is preserved.
         """
-        # Exclude the source-tracking column from the comparison so that the
-        # same record read from two different snapshot files is still treated
-        # as a duplicate.
         compare_cols = [c for c in self.df.columns if c != '_source_db']
         cleaned = self.df.drop_duplicates(subset=compare_cols)
         dropped = len(self.df) - len(cleaned)
         logger.info(f"Dropped {dropped} exact duplicate rows ({len(cleaned)} remaining).")
         return cleaned
+
+    def deduplicate_by_lastmod(self, key_columns: list[str]) -> pd.DataFrame:
+        """
+        Deduplicate records by a logical key, keeping the most recently modified
+        version (latest lastmod). Handles both exact re-syncs across archives and
+        genuine field edits where the operator corrected a record.
+        Rows missing any key value are retained as-is.
+        """
+        missing = [c for c in key_columns if c not in self.df.columns]
+        if missing:
+            logger.warning(
+                f"Logical dedup key column(s) missing: {missing}; skipping."
+            )
+            return self.df.copy()
+
+        df = self.df.copy()
+        has_key = pd.Series(True, index=df.index)
+        for col in key_columns:
+            has_key &= df[col].notna() & (df[col].astype(str).str.strip() != '')
+
+        with_key = df[has_key].copy()
+        without_key = df[~has_key]
+
+        if with_key.empty:
+            return df
+
+        if 'lastmod' in with_key.columns:
+            with_key = with_key.sort_values('lastmod', ascending=False)
+
+        deduped = with_key.drop_duplicates(subset=key_columns, keep='first')
+        dropped = len(with_key) - len(deduped)
+        logger.info(
+            f"Deduplication by {key_columns} (latest lastmod): removed {dropped} "
+            f"duplicate row(s) ({len(deduped)} unique records retained)."
+        )
+        return pd.concat([deduped, without_key], ignore_index=True)
 
     def deduplicate_by_uniqueid(self) -> pd.DataFrame:
         """

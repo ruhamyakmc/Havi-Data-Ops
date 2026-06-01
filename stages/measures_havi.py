@@ -105,11 +105,11 @@ class MeasuresHavi(BaseStage):
             if all_reports
             else pd.DataFrame(columns=[
                 'check', 'severity', 'mrccode', 'field',
-                'record_count', 'detail', 'clocation',
+                'record_count', 'detail', 'clocation', 'hhid', 'session_id',
             ])
         )
         full_report['site'] = full_report['mrccode'].astype(str).map(mrc_sites).fillna('')
-        full_report = full_report[['check', 'severity', 'site', 'mrccode', 'field', 'record_count', 'detail', 'clocation']]
+        full_report = full_report[['check', 'severity', 'site', 'mrccode', 'field', 'record_count', 'detail', 'hhid', 'session_id', 'clocation']]
 
         with self.engine.begin() as conn:
             full_report.to_sql(

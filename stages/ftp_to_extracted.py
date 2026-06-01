@@ -8,7 +8,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.config import get_country_paths
-from modules.sftp_client import SFTPClient, select_latest_remote_per_device
+from modules.sftp_client import SFTPClient, select_files_for_download
 from modules.utils import get_decrypted_password
 from stages.base import BaseStage, StageResult
 
@@ -140,9 +140,10 @@ class FtpToExtracted(BaseStage):
                 with SFTPClient(hostname, username, ftp_password) as sftp:
                     filenames = sftp.list_files(remote_path)
 
-                latest = select_latest_remote_per_device(filenames)
+                latest = select_files_for_download(filenames)
                 logger.info(
-                    f"[{country}] {len(latest)} latest zip archive(s) found on FTP."
+                    f"[{country}] {len(latest)} zip archive(s) selected for download "
+                    f"({len(filenames)} total on FTP)."
                 )
                 if not latest:
                     warnings.append(dict(

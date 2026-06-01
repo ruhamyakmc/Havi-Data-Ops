@@ -14,6 +14,9 @@ FORM_COLUMNS: dict[str, list[str]] = {
         'numfanoph',
         'nummanoph',
         'numculex',
+        'aspirations_method',
+        'rain',
+        'windforce',
         'uniqueid',
         'swver',
         'survey_id',
@@ -35,6 +38,7 @@ FORM_COLUMNS: dict[str, list[str]] = {
         'mosq_barcode_num',
         'mosq_barcode_num2',
         'mosq_barcode',
+        'aspirations_method',
         'uniqueid',
         'swver',
         'survey_id',
@@ -142,11 +146,33 @@ SILVER_METADATA_COLUMNS = [
     'extracted_at',
 ]
 
+# Default values applied in silver for columns absent in older app versions.
+# NULL in bronze means the device didn't collect the field; -6 = Not applicable.
+COLUMN_DEFAULTS: dict[str, dict[str, object]] = {
+    'ento_collection': {
+        'aspirations_method': '-6',
+        'rain': '-6',
+        'windforce': '-6',
+    },
+    'ento_mosquito': {
+        'aspirations_method': '-6',
+    },
+}
+
 PRIMARY_KEYS: dict[str, list[str]] = {
     'ento_collection': ['uniqueid', 'clocation'],
 }
 
 DEFAULT_PRIMARY_KEY = ['uniqueid']
+
+# Logical dedup keys: when the same real-world record appears in multiple
+# archives (re-sync or genuine edit), collapse to the latest lastmod.
+LOGICAL_DEDUP_KEYS: dict[str, list[str]] = {
+    'ento_collection': ['session_id', 'clocation', 'datasource'],
+    'ento_mosquito': ['mosq_barcode'],
+    'hbo_household': ['session_id'],
+    'hbo_person': ['session_id', 'individualnum'],
+}
 
 COLUMN_TYPES: dict[str, str] = {
     'extracted_at': 'TIMESTAMPTZ',
@@ -272,3 +298,11 @@ def gold_columns(table: str) -> list[str]:
 
 def primary_key_columns(table: str) -> list[str]:
     return PRIMARY_KEYS.get(table, DEFAULT_PRIMARY_KEY)
+
+
+def logical_dedup_columns(table: str) -> list[str]:
+    return LOGICAL_DEDUP_KEYS.get(table, [])
+
+
+def column_defaults(table: str) -> dict[str, object]:
+    return COLUMN_DEFAULTS.get(table, {})

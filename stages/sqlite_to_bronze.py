@@ -49,6 +49,7 @@ class SqliteToBronze(BaseStage):
 
             zip_files = sorted(
                 glob_module.glob(os.path.join(extract_path, 'havi_entomology_*.zip'))
+                + glob_module.glob(os.path.join(extract_path, 'Havi_Entomology_*.zip'))
             )
             logger.info(f"[{country}] {len(zip_files)} zip file(s) to process.")
 

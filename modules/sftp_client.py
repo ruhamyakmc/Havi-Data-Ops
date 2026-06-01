@@ -9,17 +9,68 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_DEVICE_ARCHIVE_RE = re.compile(
+# Unversioned format: havi_entomology_{device}_{timestamp}.zip  → download all
+_UNVERSIONED_RE = re.compile(
     r'^havi_entomology_(\d+)_(\d{4}-\d{2}-\d{2}_\d{2}_\d{2})\.zip$',
     re.IGNORECASE,
 )
 
+# Versioned format: havi_entomology_v{N}_{device}_{timestamp}.zip → latest only
+_VERSIONED_RE = re.compile(
+    r'^havi_entomology_v[\d.]+_(\d+)_(\d{4}-\d{2}-\d{2}_\d{2}_\d{2})\.zip$',
+    re.IGNORECASE,
+)
+
+# Combined — used for any code that just needs to know if a name is a HAVI archive.
+_DEVICE_ARCHIVE_RE = re.compile(
+    r'^havi_entomology(?:_v[\d.]+)?_(\d+)_(\d{4}-\d{2}-\d{2}_\d{2}_\d{2})\.zip$',
+    re.IGNORECASE,
+)
+
+
+def select_files_for_download(filenames: list[str]) -> dict[str, str]:
+    """
+    Return {key: filename} for files to download, applying per-format rules:
+      - Unversioned (havi_entomology_*): download ALL timestamps.
+      - Versioned (havi_entomology_v*): download only the LATEST per device.
+    Non-matching filenames are silently ignored.
+    """
+    selected: dict[str, str] = {}
+
+    # Unversioned — include every file.
+    for name in filenames:
+        if _UNVERSIONED_RE.match(name):
+            selected[name] = name
+
+    # Versioned — keep only the latest timestamp per device.
+    latest: dict[str, tuple[datetime, str]] = {}
+    for name in filenames:
+        m = _VERSIONED_RE.match(name)
+        if not m:
+            continue
+        device_id = m.group(1)
+        ts = datetime.strptime(m.group(2), '%Y-%m-%d_%H_%M')
+        existing_ts, _ = latest.get(device_id, (datetime.min, ''))
+        if ts > existing_ts:
+            latest[device_id] = (ts, name)
+    for device_id, (_, fname) in latest.items():
+        selected[fname] = fname
+
+    return selected
+
+
+def select_all_remote_files(filenames: list[str]) -> dict[str, str]:
+    """
+    Return {filename: filename} for every .zip matching the HAVI archive
+    naming convention, regardless of version or timestamp.
+    Non-matching filenames are silently ignored.
+    """
+    return {name: name for name in filenames if _DEVICE_ARCHIVE_RE.match(name)}
+
 
 def select_latest_remote_per_device(filenames: list[str]) -> dict[str, str]:
     """
-    Return {device_id: filename} for the latest .zip per device.
-    Filename format: havi_entomology_{device_id}_{YYYY-MM-DD_HH_MM}.zip
-    Non-matching filenames are silently ignored.
+    Return {device_id: filename} for the latest .zip per device (all formats).
     """
     latest: dict[str, tuple[datetime, str]] = {}
     for name in filenames:

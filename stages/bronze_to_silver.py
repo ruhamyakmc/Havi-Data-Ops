@@ -9,7 +9,9 @@ from modules.db import create_table_indexes, has_table, quote_identifier
 from modules.data_cleaner import DataCleaner
 from modules.havi_schema import (
     FORM_COLUMNS,
+    column_defaults,
     column_definitions,
+    logical_dedup_columns,
     primary_key_columns,
     silver_columns,
 )
@@ -120,6 +122,8 @@ class BronzeToSilver(BaseStage):
                     )
 
                 # Apply config-driven record-level corrections (by uniqueid).
+                # Must run before deduplicate_by_lastmod so corrected fields (e.g. mosq_barcode)
+                # are in their final state before logical dedup collapses conflicts.
                 record_corrections = (self.config.get('record_corrections') or {}).get(table, [])
                 if record_corrections and 'uniqueid' in df.columns:
                     for rc in record_corrections:
@@ -135,7 +139,9 @@ class BronzeToSilver(BaseStage):
                                 f"corrected {corrected_fields}."
                             )
 
-                # Apply config-driven exclusion list (child rows only — parent records untouched).
+                # Apply config-driven exclusion list before logical dedup so that
+                # erroneous records (e.g. datasource=2 placeholders with a newer lastmod)
+                # are removed first, allowing the genuine record to survive dedup.
                 exclusions = (self.config.get('exclusions') or {}).get(table, [])
                 if exclusions and 'uniqueid' in df.columns:
                     excluded_ids = {e['uniqueid'] for e in exclusions if 'uniqueid' in e}
@@ -146,6 +152,21 @@ class BronzeToSilver(BaseStage):
                         logger.info(
                             f"[{table}] Excluded {dropped} row(s) per config exclusion list."
                         )
+
+                logical_key = logical_dedup_columns(table)
+                if logical_key:
+                    df = DataCleaner(df).deduplicate_by_lastmod(logical_key)
+
+                # Fill columns absent in older app versions with their default value.
+                defaults = column_defaults(table)
+                for col, default in defaults.items():
+                    if col in df.columns:
+                        n = int(df[col].isna().sum())
+                        if n:
+                            df[col] = df[col].fillna(default)
+                            logger.info(
+                                f"[{table}] Filled {n} NULL value(s) in '{col}' → '{default}'."
+                            )
 
                 cleaned_tables[table] = df
 

@@ -159,7 +159,7 @@ class ExportVisits(BaseStage):
 
         # ── Build zip ─────────────────────────────────────────────────────
         today = date.today().isoformat()
-        zip_name = f'havi_first{n}_export_{today}.zip'
+        zip_name = f'havi_visit{n}_export_{today}.zip'
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:

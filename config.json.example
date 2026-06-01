@@ -45,5 +45,49 @@
       "smtp_ini": "secrets/SMTP.ini",
       "smtp_key": "secrets/SMTP.key"
     }
+  },
+  "export": {
+    "n_collections": 2
+  },
+  "box": {
+    "folder_id": "123456789"
+  },
+  "session_id_corrections": {
+    "ento_collection": [
+      {
+        "_comment": "Rename a session_id (e.g. hhid was re-registered)",
+        "session_id": "old-session-id",
+        "correct_session_id": "new-session-id"
+      }
+    ]
+  },
+  "record_corrections": {
+    "ento_mosquito": [
+      {
+        "_comment": "Fix clocation on a specific mosquito record",
+        "uniqueid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "correct_fields": {
+          "session_id": "123456789-2026-05-01-1",
+          "clocation": 1
+        }
+      }
+    ],
+    "ento_collection": [
+      {
+        "_comment": "Correct numfanoph count after a barcode was moved indoor/outdoor",
+        "uniqueid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "correct_fields": {
+          "numfanoph": 10
+        }
+      }
+    ]
+  },
+  "exclusions": {
+    "hbo_person": [
+      {
+        "_comment": "Exclude duplicate data-entry records",
+        "uniqueid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      }
+    ]
   }
 }

@@ -42,6 +42,42 @@ def _first_n_sessions(df: pd.DataFrame, date_col: str, n: int) -> pd.Series:
     return ranked <= n
 
 
+_DROP_COLS = {
+    # ETL internals
+    'run_uuid', 'file_name', 'file_path', 'extracted_at',
+    # Device / app metadata
+    'swver', 'survey_id', 'lastmod',
+    # Redundant geography (all Uganda, mrccode is sufficient)
+    'country', 'community',
+    # Barcode decomposition — mosq_barcode has the full value
+    'mosq_barcode_num', 'mosq_barcode_num2',
+}
+
+
+# Columns to place immediately before uniqueid in the output
+_BEFORE_UNIQUEID = ['aspirations_method', 'rain', 'windforce']
+
+
+def _prep(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop internal columns, fill N/A sentinels, and reorder for export."""
+    df = df.drop(columns=[c for c in _DROP_COLS if c in df.columns]).copy()
+
+    # rain / windforce: -6 = N/A (field not collected in earlier form versions)
+    for col in ('rain', 'windforce'):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(-6).astype(int)
+
+    # Move aspirations_method / rain / windforce to just before uniqueid
+    if 'uniqueid' in df.columns:
+        move = [c for c in _BEFORE_UNIQUEID if c in df.columns]
+        cols = [c for c in df.columns if c not in move]  # all cols without the moved ones
+        uid_idx = cols.index('uniqueid')
+        cols = cols[:uid_idx] + move + cols[uid_idx:]    # insert before uniqueid
+        df = df[cols]
+
+    return df
+
+
 class ExportVisits(BaseStage):
     name = 'export_visits'
     dependencies: list[str] = []
@@ -93,9 +129,18 @@ class ExportVisits(BaseStage):
                     mask = _first_n_sessions(ds_collection, date_col, n)
                     ds_collection = ds_collection[mask].copy()
 
+                    # datasource=1 (HLC): aspirations_method not applicable → -9
+                    # datasource=2 (aspirations): clocation not applicable → -9
+                    if ds == '1':
+                        if 'aspirations_method' in ds_collection.columns:
+                            ds_collection['aspirations_method'] = -9
+                    elif ds == '2':
+                        if 'clocation' in ds_collection.columns:
+                            ds_collection['clocation'] = -9
+
                     col_name = f'{label}_collection.csv'
                     buf = io.StringIO()
-                    ds_collection.to_csv(buf, index=False)
+                    _prep(ds_collection).to_csv(buf, index=False)
                     csv_buffers[col_name] = buf
                     total_rows += len(ds_collection)
                     logger.info("%s collection: %d row(s) → %s", label, len(ds_collection), col_name)
@@ -104,10 +149,14 @@ class ExportVisits(BaseStage):
                         ds_sessions = set(ds_collection['session_id'].dropna().astype(str))
                         ds_mosquito = mosquito_df[
                             mosquito_df['session_id'].astype(str).isin(ds_sessions)
-                        ]
+                        ].copy()
+                        if ds == '1' and 'aspirations_method' in ds_mosquito.columns:
+                            ds_mosquito['aspirations_method'] = -9
+                        elif ds == '2' and 'clocation' in ds_mosquito.columns:
+                            ds_mosquito['clocation'] = -9
                         mosq_name = f'{label}_mosquito.csv'
                         buf = io.StringIO()
-                        ds_mosquito.to_csv(buf, index=False)
+                        _prep(ds_mosquito).to_csv(buf, index=False)
                         csv_buffers[mosq_name] = buf
                         total_rows += len(ds_mosquito)
                         logger.info("%s mosquito: %d row(s) → %s", label, len(ds_mosquito), mosq_name)
@@ -128,7 +177,7 @@ class ExportVisits(BaseStage):
 
                 # Household CSV
                 buf = io.StringIO()
-                hbo_household.to_csv(buf, index=False)
+                _prep(hbo_household).to_csv(buf, index=False)
                 csv_buffers['hbo_household.csv'] = buf
                 total_rows += len(hbo_household)
                 logger.info("HBO household: %d row(s).", len(hbo_household))
@@ -139,7 +188,7 @@ class ExportVisits(BaseStage):
                         person_df['session_id'].astype(str).isin(hbo_sessions)
                     ]
                     buf = io.StringIO()
-                    hbo_person.to_csv(buf, index=False)
+                    _prep(hbo_person).to_csv(buf, index=False)
                     csv_buffers['hbo_person.csv'] = buf
                     total_rows += len(hbo_person)
                     logger.info("HBO person: %d row(s).", len(hbo_person))

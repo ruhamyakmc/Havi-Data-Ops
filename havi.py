@@ -157,18 +157,34 @@ def _log_summary(results: dict[str, StageResult], failed: set[str]) -> None:
         logger.warning(f'Result: FAILED ({len(failed)} stage(s))')
 
 
+def _print_stages() -> None:
+    order = topological_sort(STAGE_DEPS)
+    print('Stage execution order:')
+    for i, name in enumerate(order, 1):
+        print(f'  {i}. {name}')
+    print()
+    print('Manual stages (use -p):')
+    for name in MANUAL_STAGE_CLASSES:
+        print(f'  {name}')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='HAVI Entomology ETL orchestrator')
     parser.add_argument('-p', '--pipeline', help='Run a single named stage')
     parser.add_argument('-a', '--all', action='store_true', help='Run all stages')
+    parser.add_argument('-l', '--list', action='store_true', help='List stages in execution order')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
+
+    if args.list:
+        _print_stages()
+        return
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
     if not args.all and not args.pipeline:
-        parser.error('Specify -a (all stages) or -p <stage_name>')
+        parser.error('Specify -a (all stages), -p <stage_name>, or -l (list stages)')
 
     config = ConfigLoader('config.json')
     engine = create_db_engine(config)

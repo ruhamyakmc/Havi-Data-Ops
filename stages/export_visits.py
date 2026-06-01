@@ -65,57 +65,53 @@ class ExportVisits(BaseStage):
         household_df = read_silver('hbo_household')
         person_df = read_silver('hbo_person')
 
-        # ── HLC: first n nights per household ────────────────────────────
+        # ── Entomology: first n nights per household, split by datasource ──
+        # datasource=1 → HLC (Human Landing Catches): hlc_collection / hlc_mosquito
+        # datasource=2 → Indoor Aspirations:          aspirations_collection / aspirations_mosquito
+        _DS_LABELS = {'1': 'hlc', '2': 'aspirations'}
+
         if not collection_df.empty and 'hhid' in collection_df.columns:
             try:
-                mask = _first_n_sessions(collection_df, 'starttime', n)
-                hlc_collection = collection_df[mask].copy()
-
-                # Split by datasource and export collection + mosquito per datasource
-                if 'datasource' in hlc_collection.columns:
-                    datasources = sorted(hlc_collection['datasource'].dropna().unique())
-                else:
-                    hlc_collection['datasource'] = ''
-                    datasources = ['']
+                datasources = (
+                    sorted(collection_df['datasource'].dropna().astype(str).unique())
+                    if 'datasource' in collection_df.columns
+                    else ['']
+                )
 
                 for ds in datasources:
-                    ds_label = str(ds) if ds != '' else 'all'
-                    suffix = f'_ds{ds_label}' if ds_label != 'all' else ''
+                    label = _DS_LABELS.get(ds, f'ds{ds}')
+                    ds_collection = (
+                        collection_df[collection_df['datasource'].astype(str) == ds].copy()
+                        if ds else collection_df.copy()
+                    )
 
-                    if ds != '':
-                        ds_collection = hlc_collection[hlc_collection['datasource'].astype(str) == str(ds)]
-                    else:
-                        ds_collection = hlc_collection
+                    # Apply first-n-nights filter independently per datasource so
+                    # aspirations dates (later in calendar) are not ranked against HLC nights
+                    date_col = 'starttime' if 'starttime' in ds_collection.columns else 'dateofcollection'
+                    mask = _first_n_sessions(ds_collection, date_col, n)
+                    ds_collection = ds_collection[mask].copy()
 
-                    # Collection CSV
-                    col_name = f'hlc_collection{suffix}.csv'
+                    col_name = f'{label}_collection.csv'
                     buf = io.StringIO()
                     ds_collection.to_csv(buf, index=False)
                     csv_buffers[col_name] = buf
                     total_rows += len(ds_collection)
-                    logger.info(
-                        "HLC collection (datasource=%s): %d row(s) → %s",
-                        ds_label, len(ds_collection), col_name,
-                    )
+                    logger.info("%s collection: %d row(s) → %s", label, len(ds_collection), col_name)
 
-                    # Mosquito CSV — join via session_id
                     if not mosquito_df.empty and 'session_id' in mosquito_df.columns:
                         ds_sessions = set(ds_collection['session_id'].dropna().astype(str))
                         ds_mosquito = mosquito_df[
                             mosquito_df['session_id'].astype(str).isin(ds_sessions)
                         ]
-                        mosq_name = f'hlc_mosquito{suffix}.csv'
+                        mosq_name = f'{label}_mosquito.csv'
                         buf = io.StringIO()
                         ds_mosquito.to_csv(buf, index=False)
                         csv_buffers[mosq_name] = buf
                         total_rows += len(ds_mosquito)
-                        logger.info(
-                            "HLC mosquito (datasource=%s): %d row(s) → %s",
-                            ds_label, len(ds_mosquito), mosq_name,
-                        )
+                        logger.info("%s mosquito: %d row(s) → %s", label, len(ds_mosquito), mosq_name)
 
             except Exception as exc:
-                msg = f"HLC export failed: {exc}"
+                msg = f"Entomology export failed: {exc}"
                 logger.error(msg)
                 errors.append(msg)
         else:

@@ -171,11 +171,18 @@ class ExportVisits(BaseStage):
         if errors:
             return StageResult(success=False, rows_written=total_rows, errors=errors)
 
+        # ── Save to disk ──────────────────────────────────────────────────
+        output_dir = Path('Output')
+        output_dir.mkdir(exist_ok=True)
+        local_path = output_dir / zip_name
+        local_path.write_bytes(zip_buffer.getvalue())
+        logger.info("Saved '%s' to %s.", zip_name, local_path.resolve())
+
         # ── Upload to Box ─────────────────────────────────────────────────
         folder_id = (self.config.get('box') or {}).get('folder_id')
 
         if not folder_id:
-            logger.warning("config.json missing 'box.folder_id' — zip built but NOT uploaded.")
+            logger.info("No Box folder_id configured — zip saved locally only.")
             return StageResult(success=True, rows_written=total_rows)
 
         client = _get_box_client()

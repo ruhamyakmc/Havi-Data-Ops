@@ -44,6 +44,7 @@ services:
       - ./secrets:/app/secrets:ro
       - ./Downloads:/app/Downloads
       - ./Extracted:/app/Extracted
+      - ./Output:/app/Output
       - ./logs:/var/log/havi
     command: ["cron", "-f"]
     restart: on-failure:3

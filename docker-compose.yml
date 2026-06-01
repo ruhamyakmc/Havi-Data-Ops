@@ -32,6 +32,7 @@ services:
         condition: service_healthy
 
   etl:
+    image: ghcr.io/ruhamyakmc/havi-etl:latest
     build: .
     depends_on:
       db:

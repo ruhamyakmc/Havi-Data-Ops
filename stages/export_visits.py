@@ -42,8 +42,8 @@ def _first_n_sessions(df: pd.DataFrame, date_col: str, n: int) -> pd.Series:
     return ranked <= n
 
 
-class ExportFirst3(BaseStage):
-    name = 'export_first3'
+class ExportVisits(BaseStage):
+    name = 'export_visits'
     dependencies: list[str] = []
 
     def run(self) -> StageResult:

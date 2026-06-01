@@ -20,6 +20,7 @@ class _CollectionChecks:
         """Run all ento_collection checks. Returns a report DataFrame."""
         issues: list[dict] = []
         issues += self._required_fields(collection_df, _COLLECTION_REQUIRED)
+        issues += self._malformed_session_id(collection_df)
         issues += self._mrccode_validity(collection_df)
         issues += self._code_validity(collection_df, 'datasource', {1, 2}, 'invalid_datasource',
                                        '1 (HLC) or 2 (Indoor Aspirations)')
@@ -38,6 +39,24 @@ class _CollectionChecks:
         issues += self._count_outliers(collection_df)
         issues += self._sparse_columns(collection_df)
         return self._to_df(issues)
+
+    def _malformed_session_id(self, df: pd.DataFrame) -> list[dict]:
+        """Flag session_ids that end in a bare '-' (missing clocation/method suffix)."""
+        if 'session_id' not in df.columns:
+            return []
+        bad = df['session_id'].fillna('').astype(str).str.endswith('-')
+        n = int(bad.sum())
+        if not n:
+            return []
+        examples = df.loc[bad, 'session_id'].head(5).tolist()
+        return [_issue(
+            'malformed_session_id', 'ERROR', 'session_id', n,
+            f"{n} record(s) have a session_id ending in '-' (missing clocation or "
+            f"aspirations_method suffix). Valid suffixes: -1/-2 (HLC) or -3/-4 (aspirations). "
+            f"Examples: {examples}.",
+            hhid=self._hhids(df, bad),
+            session_id=self._session_ids(df, bad),
+        )]
 
     def _counts_nonnegative(self, df: pd.DataFrame) -> list[dict]:
         issues = []

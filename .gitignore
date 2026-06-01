@@ -19,6 +19,9 @@ env/
 config.json
 secrets/
 
+# Operational logs (data corrections, exclusions — stored locally only)
+CHANGELOG.md
+
 # Data directories (large binary files, managed outside git)
 Downloads/
 Extracted/

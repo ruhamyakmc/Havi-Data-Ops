@@ -56,8 +56,13 @@ class _MosquitoChecks:
         if 'clocation' not in mosquito_df.columns:
             return []
 
+        # datasource=2 (Indoor Aspirations) records have no clocation by design — exclude them.
+        hlc_collection = collection_df[
+            collection_df.get('datasource', pd.Series(dtype=str)).astype(str) != '2'
+        ] if 'datasource' in collection_df.columns else collection_df
+
         parent_loc = (
-            collection_df[['session_id', 'clocation']]
+            hlc_collection[['session_id', 'clocation']]
             .dropna(subset=['session_id'])
             .drop_duplicates(subset=['session_id'])
             .set_index('session_id')['clocation']

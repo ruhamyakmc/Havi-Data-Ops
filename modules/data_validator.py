@@ -208,6 +208,7 @@ class EntomologyValidator:
         issues += self._duration_impossible(collection_df)
         issues += self._duration_too_long(collection_df, hours=12)
         issues += self._count_vs_children(collection_df, mosquito_df)
+        issues += self._clocation_swap(collection_df, mosquito_df)
         issues += self._duplicate_collection_key(collection_df)
         issues += self._duplicate_session_datasource(collection_df)
         issues += self._device_record_count(collection_df)
@@ -765,6 +766,68 @@ class EntomologyValidator:
             ))
 
         return issues
+
+    def _clocation_swap(
+        self,
+        collection_df: pd.DataFrame,
+        mosquito_df: pd.DataFrame,
+    ) -> list[dict]:
+        """Detect likely indoor/outdoor swap: one clocation declares mosquitoes but
+        has none, while its paired clocation on the same night has all the records."""
+        required = {'hhid', 'session_id', 'clocation', 'numfanoph', 'starttime'}
+        if not required.issubset(collection_df.columns):
+            return []
+        if mosquito_df.empty or 'session_id' not in mosquito_df.columns:
+            return []
+
+        col = collection_df.copy()
+        col['_date'] = pd.to_datetime(col['starttime'], errors='coerce').dt.date
+        col['_declared'] = pd.to_numeric(col['numfanoph'], errors='coerce').fillna(0)
+        col['_cloc'] = col['clocation'].astype(str)
+        col['_sid'] = col['session_id'].astype(str)
+
+        mosq_counts = mosquito_df['session_id'].astype(str).value_counts()
+        col['_actual'] = col['_sid'].map(mosq_counts).fillna(0).astype(int)
+
+        # Need both clocations present for the same (hhid, night).
+        paired = col.dropna(subset=['hhid', '_date']).copy()
+        night_cloc_counts = paired.groupby(['hhid', '_date'])['_cloc'].nunique()
+        both_nights = night_cloc_counts[night_cloc_counts >= 2].index
+        paired = paired.set_index(['hhid', '_date']).loc[
+            paired.set_index(['hhid', '_date']).index.isin(both_nights)
+        ].reset_index()
+
+        if paired.empty:
+            return []
+
+        # Within each (hhid, night), flag if one clocation has declared > 0 and
+        # actual == 0, while the other clocation has actual > 0.
+        swap_sids: list[str] = []
+        swap_hhids: list[str] = []
+        for (hhid, night), grp in paired.groupby(['hhid', '_date']):
+            has_declared_no_records = grp[
+                (grp['_declared'] > 0) & (grp['_actual'] == 0)
+            ]
+            has_records = grp[grp['_actual'] > 0]
+            if not has_declared_no_records.empty and not has_records.empty:
+                swap_sids.extend(has_declared_no_records['_sid'].tolist())
+                swap_sids.extend(has_records['_sid'].tolist())
+                swap_hhids.append(str(hhid))
+
+        n = len(set(swap_hhids))
+        if not n:
+            return []
+
+        swap_sid_str = ', '.join(sorted(set(swap_sids)))
+        swap_hhid_str = ', '.join(sorted(set(swap_hhids)))
+        return [_issue(
+            'clocation_swap', 'ERROR', 'clocation', n,
+            f"{n} household night(s) show a likely indoor/outdoor swap: one clocation "
+            f"declares mosquitoes but has no records while the paired clocation has all "
+            f"records. Affected sessions: {sorted(set(swap_sids))}.",
+            hhid=swap_hhid_str,
+            session_id=swap_sid_str,
+        )]
 
     def _duplicate_session_datasource(self, df: pd.DataFrame) -> list[dict]:
         key_cols = ['session_id', 'datasource']

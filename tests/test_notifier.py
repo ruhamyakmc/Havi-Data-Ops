@@ -260,3 +260,164 @@ def test_send_no_cc_does_not_add_cc_header(tmp_path):
         _send(email_cfg, ['to@example.com'], 'Subject', 'plain', '<b>html</b>')
 
     assert 'Cc:' not in captured['msg']
+
+
+def _make_cluster_config(tmp_path):
+    """Full config with clusters and field_cc for cluster routing tests."""
+    key = Fernet.generate_key()
+    cipher = Fernet(key)
+    key_file = tmp_path / 'smtp.key'
+    ini_file = tmp_path / 'smtp.ini'
+    key_file.write_text(key.decode())
+    ini_file.write_text(f"Password={cipher.encrypt(b's3cr3t').decode()}\n")
+    return {
+        'email': {
+            'smtp_host': 'smtp.example.com',
+            'smtp_port': 587,
+            'sender': 'havi@example.com',
+            'smtp_username': 'user@example.com',
+            'pipeline_recipients': ['admin@example.com'],
+            'field_cc': ['cc@example.com'],
+            'keyfiles': {'smtp_ini': str(ini_file), 'smtp_key': str(key_file)},
+        },
+        'clusters': {
+            'A': {
+                'supervisor': 'Sisye Paul',
+                'to': ['supervisorA@example.com'],
+                'mrc_codes': ['23', '25'],
+            },
+            'B': {
+                'supervisor': 'Otto Geoffrey',
+                'to': ['supervisorB@example.com'],
+                'mrc_codes': ['12'],
+            },
+        },
+        'mrc_sites': {
+            '23': 'Atiak HCIV - Amuru',
+            '25': 'Awach HCIV - Gulu',
+            '12': 'Kyatiri HCIII - Masindi',
+        },
+    }
+
+
+def test_cluster_routing_sends_to_correct_supervisor(tmp_path):
+    config = _make_cluster_config(tmp_path)
+    # Only Cluster A (mrccode 23) has an issue
+    report = pd.DataFrame({
+        'severity': ['ERROR'],
+        'check': ['count_mismatch'],
+        'country': ['Uganda'],
+        'site': ['Atiak HCIV - Amuru'],
+        'mrccode': ['23'],
+        'record_count': [1],
+    })
+    sendmail_calls = []
+    mock_smtp_instance = MagicMock()
+    mock_smtp_instance.sendmail.side_effect = lambda *a, **kw: sendmail_calls.append(a)
+
+    with patch('modules.notifier._query_validation_report', return_value=report):
+        with patch('modules.notifier._build_validation_details_excel', return_value=b'xlsx'):
+            with patch('smtplib.SMTP') as mock_smtp_cls:
+                mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
+                send_pipeline_report(
+                    results={'sqlite_to_bronze': StageResult(success=True)},
+                    stages=['sqlite_to_bronze'],
+                    engine=MagicMock(),
+                    config=config,
+                )
+
+    all_recipients = [r for call in sendmail_calls for r in call[1]]
+    assert 'supervisorA@example.com' in all_recipients
+    assert 'supervisorB@example.com' not in all_recipients
+
+
+def test_cluster_routing_cc_recipients_receive_all_cluster_emails(tmp_path):
+    config = _make_cluster_config(tmp_path)
+    report = pd.DataFrame({
+        'severity': ['ERROR'],
+        'check': ['count_mismatch'],
+        'country': ['Uganda'],
+        'site': ['Atiak HCIV - Amuru'],
+        'mrccode': ['23'],
+        'record_count': [1],
+    })
+    sendmail_calls = []
+    mock_smtp_instance = MagicMock()
+    mock_smtp_instance.sendmail.side_effect = lambda *a, **kw: sendmail_calls.append(a)
+
+    with patch('modules.notifier._query_validation_report', return_value=report):
+        with patch('modules.notifier._build_validation_details_excel', return_value=b'xlsx'):
+            with patch('smtplib.SMTP') as mock_smtp_cls:
+                mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
+                send_pipeline_report(
+                    results={'sqlite_to_bronze': StageResult(success=True)},
+                    stages=['sqlite_to_bronze'],
+                    engine=MagicMock(),
+                    config=config,
+                )
+
+    # cc@example.com should appear in the cluster A field email recipients
+    field_call = next(
+        c for c in sendmail_calls if 'supervisorA@example.com' in c[1]
+    )
+    assert 'cc@example.com' in field_call[1]
+
+
+def test_cluster_field_email_subject_contains_cluster_and_supervisor(tmp_path):
+    config = _make_cluster_config(tmp_path)
+    report = pd.DataFrame({
+        'severity': ['WARNING'],
+        'check': ['sparse_col'],
+        'country': ['Uganda'],
+        'site': ['Atiak HCIV - Amuru'],
+        'mrccode': ['23'],
+        'record_count': [1],
+    })
+    sendmail_calls = []
+    mock_smtp_instance = MagicMock()
+    mock_smtp_instance.sendmail.side_effect = lambda *a, **kw: sendmail_calls.append(a)
+
+    with patch('modules.notifier._query_validation_report', return_value=report):
+        with patch('modules.notifier._build_validation_details_excel', return_value=b'xlsx'):
+            with patch('smtplib.SMTP') as mock_smtp_cls:
+                mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
+                send_pipeline_report(
+                    results={'sqlite_to_bronze': StageResult(success=True)},
+                    stages=['sqlite_to_bronze'],
+                    engine=MagicMock(),
+                    config=config,
+                )
+
+    field_call = next(c for c in sendmail_calls if 'supervisorA@example.com' in c[1])
+    assert 'Cluster A' in field_call[2]
+    assert 'Sisye Paul' in field_call[2]
+
+
+def test_cluster_field_email_body_does_not_contain_stage_summary(tmp_path):
+    config = _make_cluster_config(tmp_path)
+    report = pd.DataFrame({
+        'severity': ['ERROR'],
+        'check': ['count_mismatch'],
+        'country': ['Uganda'],
+        'site': ['Atiak HCIV - Amuru'],
+        'mrccode': ['23'],
+        'record_count': [1],
+    })
+    sendmail_calls = []
+    mock_smtp_instance = MagicMock()
+    mock_smtp_instance.sendmail.side_effect = lambda *a, **kw: sendmail_calls.append(a)
+
+    with patch('modules.notifier._query_validation_report', return_value=report):
+        with patch('modules.notifier._build_validation_details_excel', return_value=b'xlsx'):
+            with patch('smtplib.SMTP') as mock_smtp_cls:
+                mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
+                send_pipeline_report(
+                    results={'sqlite_to_bronze': StageResult(success=True)},
+                    stages=['sqlite_to_bronze'],
+                    engine=MagicMock(),
+                    config=config,
+                )
+
+    field_call = next(c for c in sendmail_calls if 'supervisorA@example.com' in c[1])
+    # Stage summary lines contain stage names like sqlite_to_bronze
+    assert 'sqlite_to_bronze' not in field_call[2]

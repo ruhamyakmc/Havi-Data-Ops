@@ -435,31 +435,45 @@ def send_pipeline_report(
         except Exception as exc:
             logger.error('Notifier failed for pipeline recipients: %s', exc)
 
-    field_recipients = email_cfg.get('field_recipients', [])
-    if not field_recipients or report_df is None or report_df.empty:
+    if report_df is None or report_df.empty:
         return
     if 'severity' not in report_df.columns or not report_df['severity'].isin(['ERROR', 'WARNING']).any():
         return
-    if date.today().weekday() != 4:  # 4 = Friday
-        logger.info('Field quality report skipped — only sent on Fridays.')
+
+    clusters = config.get('clusters', {})
+    if not clusters or 'mrccode' not in report_df.columns:
         return
 
+    field_cc = email_cfg.get('field_cc', [])
     mrc_sites = config.get('mrc_sites') or {}
     today_iso = date.today().strftime('%Y-%m-%d')
-    extra_attachments: list[tuple[bytes, str]] = []
 
-    validation_excel = _build_validation_details_excel(engine, report_df, mrc_sites)
-    extra_attachments.append((validation_excel, f'havi_validation_report_{today_iso}.xlsx'))
+    for cluster_id, cluster in clusters.items():
+        to = cluster.get('to', [])
+        if not to:
+            continue
+        mrc_codes = [str(c) for c in cluster.get('mrc_codes', [])]
+        cluster_df = report_df[report_df['mrccode'].astype(str).isin(mrc_codes)]
+        if cluster_df.empty:
+            continue
+        if not cluster_df['severity'].isin(['ERROR', 'WARNING']).any():
+            continue
 
-    validation_section = _build_validation_summary(report_df)
-    subject = f'HAVI Data Quality - issues found ({today})'
-    plain = f'{stage_section}\n\n{validation_section}'
-    html = f'<pre style="font-family:monospace;font-size:13px">{_html.escape(plain)}</pre>'
-    try:
-        _send(
-            email_cfg, field_recipients, subject, plain, html,
-            extra_attachments=extra_attachments,
-        )
-        logger.info('Field quality report sent to %s.', field_recipients)
-    except Exception as exc:
-        logger.error('Notifier failed for field recipients %s: %s', field_recipients, exc)
+        supervisor = cluster.get('supervisor', f'Cluster {cluster_id}')
+        subject = f'HAVI Data Quality \u2014 Cluster {cluster_id} ({supervisor}) \u2014 {today}'
+        cluster_header = f'Cluster {cluster_id} - {supervisor}\n'
+        validation_section = cluster_header + _build_validation_summary(cluster_df)
+        html = f'<pre style="font-family:monospace;font-size:13px">{_html.escape(validation_section)}</pre>'
+        validation_excel = _build_validation_details_excel(engine, cluster_df, mrc_sites)
+        extra_attachments: list[tuple[bytes, str]] = [
+            (validation_excel, f'havi_validation_report_cluster{cluster_id}_{today_iso}.xlsx'),
+        ]
+        try:
+            _send(
+                email_cfg, to, subject, validation_section, html,
+                cc=field_cc,
+                extra_attachments=extra_attachments,
+            )
+            logger.info('Field quality report sent for cluster %s to %s.', cluster_id, to)
+        except Exception as exc:
+            logger.error('Notifier failed for cluster %s (%s): %s', cluster_id, to, exc)

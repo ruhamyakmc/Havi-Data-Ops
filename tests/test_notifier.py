@@ -115,7 +115,7 @@ def _make_email_cfg(tmp_path):
         'sender': 'havi@example.com',
         'smtp_username': 'user@example.com',
         'pipeline_recipients': ['admin@example.com'],
-        'field_recipients': ['ug-team@example.com'],
+        'field_cc': ['cc@example.com'],
         'keyfiles': {
             'smtp_ini': str(ini_file),
             'smtp_key': str(key_file),
@@ -172,16 +172,16 @@ def test_send_pipeline_report_failed_subject_says_failed(tmp_path):
     assert 'HAVI Pipeline' in msg_string
 
 
-def test_send_pipeline_report_field_email_sent_on_issues(tmp_path):
+def test_send_pipeline_report_field_email_not_sent_without_clusters(tmp_path):
+    # When config has no clusters block, no field emails are sent — only pipeline status.
     config = _config(_make_email_cfg(tmp_path))
     results = {'sqlite_to_bronze': StageResult(success=True)}
     report = pd.DataFrame({
         'severity': ['WARNING'], 'check': ['sparse_column'],
         'country': ['Uganda'], 'site': ['Mbarara'],
-        'record_count': [2], 'detail': ['test'],
-        'affected_ids': ['uid1'],
+        'mrccode': ['25'],
+        'record_count': [2],
     })
-
     sendmail_calls = []
     mock_smtp_instance = MagicMock()
     mock_smtp_instance.sendmail.side_effect = lambda *a, **kw: sendmail_calls.append(a)
@@ -189,17 +189,14 @@ def test_send_pipeline_report_field_email_sent_on_issues(tmp_path):
     with patch('modules.notifier._query_validation_report', return_value=report):
         with patch('smtplib.SMTP') as mock_smtp_cls:
             mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
-            with patch('modules.notifier.date') as mock_date:
-                mock_date.today.return_value.weekday.return_value = 4  # Friday
-                mock_date.today.return_value.strftime.return_value = '2026-06-05'
-                send_pipeline_report(
-                    results=results, stages=['sqlite_to_bronze'],
-                    engine=MagicMock(), config=config,
-                )
+            send_pipeline_report(
+                results=results, stages=['sqlite_to_bronze'],
+                engine=MagicMock(), config=config,
+            )
 
-    recipients_seen = [call[1] for call in sendmail_calls]
-    assert ['admin@example.com'] in recipients_seen
-    assert ['ug-team@example.com'] in recipients_seen
+    # Only the pipeline status email is sent
+    assert len(sendmail_calls) == 1
+    assert sendmail_calls[0][1] == ['admin@example.com']
 
 
 def test_send_pipeline_report_does_not_raise_on_smtp_error(tmp_path):

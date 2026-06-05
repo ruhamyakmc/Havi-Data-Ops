@@ -362,6 +362,7 @@ def _send(
     attachment_df: pd.DataFrame | None = None,
     attachment_filename: str | None = None,
     extra_attachments: list[tuple[bytes, str]] | None = None,
+    cc: list[str] | None = None,
 ) -> None:
     """Assemble a multipart email and send it via SMTP with STARTTLS."""
     ini_path = email_cfg['keyfiles']['smtp_ini']
@@ -373,6 +374,8 @@ def _send(
     msg['Subject'] = subject
     msg['From'] = email_cfg['sender']
     msg['To'] = ', '.join(recipients)
+    if cc:
+        msg['Cc'] = ', '.join(cc)
 
     alt = MIMEMultipart('alternative')
     alt.attach(MIMEText(plain, 'plain'))
@@ -389,7 +392,7 @@ def _send(
     with smtplib.SMTP(email_cfg['smtp_host'], email_cfg['smtp_port']) as smtp:
         smtp.starttls(context=ssl.create_default_context())
         smtp.login(username, password)
-        smtp.sendmail(email_cfg['sender'], recipients, msg.as_string())
+        smtp.sendmail(email_cfg['sender'], recipients + (cc or []), msg.as_string())
 
 
 def send_pipeline_report(

@@ -12,6 +12,7 @@ from modules.notifier import (
     _build_validation_summary,
     _load_smtp_password,
     _query_validation_report,
+    _send,
     send_pipeline_report,
 )
 from stages.base import StageResult
@@ -211,3 +212,51 @@ def test_send_pipeline_report_does_not_raise_on_smtp_error(tmp_path):
                 results=results, stages=['sqlite_to_bronze'],
                 engine=MagicMock(), config=config,
             )
+
+
+def _make_smtp_cfg(tmp_path):
+    """Minimal email config for testing _send directly."""
+    key = Fernet.generate_key()
+    cipher = Fernet(key)
+    key_file = tmp_path / 'smtp.key'
+    ini_file = tmp_path / 'smtp.ini'
+    key_file.write_text(key.decode())
+    ini_file.write_text(f"Password={cipher.encrypt(b's3cr3t').decode()}\n")
+    return {
+        'smtp_host': 'smtp.example.com',
+        'smtp_port': 587,
+        'sender': 'havi@example.com',
+        'smtp_username': 'user@example.com',
+        'keyfiles': {'smtp_ini': str(ini_file), 'smtp_key': str(key_file)},
+    }
+
+
+def test_send_includes_cc_header_when_cc_provided(tmp_path):
+    email_cfg = _make_smtp_cfg(tmp_path)
+    captured = {}
+    mock_smtp_instance = MagicMock()
+    mock_smtp_instance.sendmail.side_effect = (
+        lambda sender, recipients, msg: captured.update({'recipients': recipients, 'msg': msg})
+    )
+    with patch('smtplib.SMTP') as mock_smtp_cls:
+        mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
+        _send(email_cfg, ['to@example.com'], 'Subject', 'plain', '<b>html</b>',
+              cc=['cc1@example.com', 'cc2@example.com'])
+
+    assert 'Cc: cc1@example.com, cc2@example.com' in captured['msg']
+    assert 'cc1@example.com' in captured['recipients']
+    assert 'cc2@example.com' in captured['recipients']
+
+
+def test_send_no_cc_does_not_add_cc_header(tmp_path):
+    email_cfg = _make_smtp_cfg(tmp_path)
+    captured = {}
+    mock_smtp_instance = MagicMock()
+    mock_smtp_instance.sendmail.side_effect = (
+        lambda sender, recipients, msg: captured.update({'msg': msg})
+    )
+    with patch('smtplib.SMTP') as mock_smtp_cls:
+        mock_smtp_cls.return_value.__enter__.return_value = mock_smtp_instance
+        _send(email_cfg, ['to@example.com'], 'Subject', 'plain', '<b>html</b>')
+
+    assert 'Cc:' not in captured['msg']

@@ -33,6 +33,7 @@ class _MosquitoChecks:
         issues += self._orphan_records(mosquito_df, collection_df, 'session_id', 'orphan_mosquito')
         issues += self._clocation_vs_parent(mosquito_df, collection_df)
         issues += self._code_validity(mosquito_df, 'chour', set(range(1, 19)), 'invalid_chour', '1-18')
+        issues += self._chour_out_of_window(mosquito_df)
         issues += self._code_validity(mosquito_df, 'grossspecies', set(range(1, 10)),
                                        'invalid_grossspecies', '1-9')
         issues += self._code_validity(mosquito_df, 'abdstatus', {0, 1, 2, 3}, 'invalid_abdstatus', '0-3')
@@ -42,6 +43,51 @@ class _MosquitoChecks:
         issues += self._duration_impossible(mosquito_df)
         issues += self._sparse_columns(mosquito_df)
         return self._to_df(issues)
+
+    def _chour_out_of_window(self, df: pd.DataFrame) -> list[dict]:
+        """Flag mosquito records collected outside the expected 6pm–6am window.
+
+        Before 6pm (chour 1–2): always flagged.
+        After 7am  (chour 16–18): flagged unless aspirations_method == '4',
+            which permits extended indoor aspiration beyond sunrise.
+        """
+        if 'chour' not in df.columns:
+            return []
+
+        chour = pd.to_numeric(df['chour'], errors='coerce')
+        issues = []
+
+        # --- before 6pm: chour 1 (4–5pm) or 2 (5–6pm) ---
+        early = chour.isin({1, 2})
+        n_early = int(early.sum())
+        if n_early:
+            issues.append(_issue(
+                'chour_before_6pm', 'WARNING', 'chour', n_early,
+                f"{n_early} record(s) have chour in {{1,2}} indicating collection "
+                f"before 6 pm. Expected window is 6 pm–6 am.",
+                _clocation(df, early),
+                hhid=self._hhids(df, early),
+                session_id=self._session_ids(df, early),
+            ))
+
+        # --- after 6am: chour 15 (6–7am), 16 (7–8am), 17 (8–9am), 18 (9–10am) ---
+        # aspirations_method == '4' (indoor aspiration) is exempt.
+        late = chour.isin({15, 16, 17, 18})
+        if late.any() and 'aspirations_method' in df.columns:
+            exempt = df['aspirations_method'].astype(str).str.strip() == '4'
+            late = late & ~exempt
+        n_late = int(late.sum())
+        if n_late:
+            issues.append(_issue(
+                'chour_after_6am', 'WARNING', 'chour', n_late,
+                f"{n_late} record(s) have chour in {{15,16,17,18}} indicating collection "
+                f"after 6 am (aspirations_method=4 records are exempt).",
+                _clocation(df, late),
+                hhid=self._hhids(df, late),
+                session_id=self._session_ids(df, late),
+            ))
+
+        return issues
 
     def _clocation_vs_parent(
         self,

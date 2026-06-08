@@ -5,8 +5,10 @@ import io
 import logging
 import smtplib
 import ssl
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from email import encoders
+
+_EAT = timezone(timedelta(hours=3))  # East African Time (UTC+3)
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -311,6 +313,30 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
                 'numsleeprooms': 'Sleep Rooms', 'numsleepareas': 'Sleep Areas',
                 'numhangbednets': 'Bed Nets', 'numpeople': 'Num People'}), start_row=2, fill=err_fill)
 
+    if 'mosquito_clocation_mismatch' in checks_present:
+        ws = wb.create_sheet('mosquito_clocation_mismatch')
+        ws.cell(1, 1, 'Mosquito records where clocation differs from parent collection').font = bold_font
+        df = _query("""
+            SELECT m.session_id, m.hhid, m.mrccode,
+                   m.clocation  AS mosquito_clocation,
+                   c.clocation  AS collection_clocation
+            FROM gold_havi.ento_mosquito m
+            JOIN gold_havi.ento_collection c ON m.session_id = c.session_id
+            WHERE m.clocation IS NOT NULL
+              AND m.clocation::text != c.clocation::text
+              AND (c.datasource IS NULL OR c.datasource::text != '2')
+            ORDER BY m.mrccode, m.session_id
+        """)
+        if not df.empty:
+            df['mosquito_clocation'] = df['mosquito_clocation'].astype(str).map(cloc_label).fillna(df['mosquito_clocation'].astype(str))
+            df['collection_clocation'] = df['collection_clocation'].astype(str).map(cloc_label).fillna(df['collection_clocation'].astype(str))
+            df['site'] = df['mrccode'].astype(str).map(mrc_sites).fillna('')
+            cols = ['site', 'session_id', 'hhid', 'mosquito_clocation', 'collection_clocation']
+            _write_df(ws, df[cols].rename(columns={
+                'site': 'Site', 'session_id': 'Session ID', 'hhid': 'Household ID',
+                'mosquito_clocation': 'Mosquito clocation', 'collection_clocation': 'Collection clocation',
+            }), start_row=2, fill=err_fill)
+
     if 'obs_transition_net_out_net' in checks_present:
         ws = wb.create_sheet('obs_transition_net_out_net')
         ws.cell(1, 1, 'Person records with Under-net IN → Near net OUT → Under-net IN transition').font = bold_font
@@ -434,6 +460,12 @@ def send_pipeline_report(
             logger.info('Pipeline status email sent to %s.', pipeline_recipients)
         except Exception as exc:
             logger.error('Notifier failed for pipeline recipients: %s', exc)
+
+    if has_failures:
+        return
+
+    if datetime.now(_EAT).weekday() not in (0, 2, 4):  # Monday=0, Wednesday=2, Friday=4
+        return
 
     if report_df is None or report_df.empty:
         return

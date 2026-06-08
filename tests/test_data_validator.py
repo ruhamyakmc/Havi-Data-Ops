@@ -41,7 +41,7 @@ def _mosquito(session_id='sess1', n=3) -> pd.DataFrame:
             'session_id': session_id,
             'clocation': '1',
             'mosqnum': str(i),
-            'chour': '1',
+            'chour': '5',
             'grossspecies': '1',
             'abdstatus': '1',
             'mosq_barcode': f'H26-KM1-{i:04d}',
@@ -205,6 +205,37 @@ def test_invalid_chour():
     mosq['chour'] = '99'
     report = V.validate_mosquito(mosq, _collection())
     assert not report[report['check'] == 'invalid_chour'].empty
+
+
+def test_chour_before_6pm():
+    mosq = _mosquito(n=1)
+    mosq['chour'] = '2'  # 5pm–6pm
+    report = V.validate_mosquito(mosq, _collection())
+    assert not report[report['check'] == 'chour_before_6pm'].empty
+
+
+def test_chour_after_6am_flagged():
+    mosq = _mosquito(n=1)
+    mosq['chour'] = '15'  # 6am–7am
+    mosq['aspirations_method'] = '1'  # not exempt
+    report = V.validate_mosquito(mosq, _collection())
+    assert not report[report['check'] == 'chour_after_6am'].empty
+
+
+def test_chour_after_6am_exempt_for_aspiration_method_4():
+    mosq = _mosquito(n=1)
+    mosq['chour'] = '15'  # 6am–7am
+    mosq['aspirations_method'] = '4'  # indoor aspiration — exempt
+    report = V.validate_mosquito(mosq, _collection())
+    assert report[report['check'] == 'chour_after_6am'].empty
+
+
+def test_chour_in_window_no_flag():
+    mosq = _mosquito(n=1)
+    mosq['chour'] = '10'  # 1am–2am — well within window
+    report = V.validate_mosquito(mosq, _collection())
+    assert report[report['check'] == 'chour_before_6pm'].empty
+    assert report[report['check'] == 'chour_after_6am'].empty
 
 
 def test_invalid_grossspecies():

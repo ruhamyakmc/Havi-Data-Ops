@@ -33,6 +33,7 @@ review/
 *.xlsx
 *.xls
 *.csv
+*.tex
 
 # Logs
 *.log

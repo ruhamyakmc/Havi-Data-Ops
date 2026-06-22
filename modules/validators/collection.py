@@ -298,7 +298,7 @@ class _CollectionChecks:
         if low.empty:
             return []
         return [_issue(
-            'low_device_record_count', 'WARNING', col, int(low.sum()),
+            'low_device_record_count', 'WARNING', col, len(low),
             f"{len(low)} device file(s) contributed <= 2 records: {low.index.tolist()}.",
         )]
 

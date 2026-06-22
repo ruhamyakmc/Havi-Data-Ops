@@ -535,6 +535,29 @@ def test_field_reports_sent_on_send_day(tmp_path):
     assert 'supervisorA@example.com' in all_recipients
 
 
+def test_build_validation_details_excel_creates_sheet_for_every_check():
+    """Every distinct check in the report must produce its own sheet."""
+    report = pd.DataFrame({
+        'check': ['invalid_chour', 'duplicate_barcode', 'count_mismatch'],
+        'severity': ['ERROR', 'ERROR', 'ERROR'],
+        'mrccode': ['23', '23', '23'],
+        'site': ['Atiak', 'Atiak', 'Atiak'],
+        'field': ['chour', 'mosq_barcode', 'numfanoph'],
+        'record_count': [1, 2, 3],
+        'detail': ['d1', 'd2', 'd3'],
+        'clocation': ['', '', ''],
+        'hhid': ['h1', 'h2', 'h3'],
+        'session_id': ['s1', 's2', 's3'],
+    })
+    with patch('pandas.read_sql', return_value=pd.DataFrame()):
+        result_bytes = _build_validation_details_excel(MagicMock(), report, {})
+
+    wb = load_workbook(_io.BytesIO(result_bytes))
+    assert 'invalid_chour' in wb.sheetnames
+    assert 'duplicate_barcode' in wb.sheetnames
+    assert 'count_mismatch' in wb.sheetnames
+
+
 def test_build_validation_details_excel_includes_clocation_mismatch_sheet():
     report = pd.DataFrame({
         'check': ['mosquito_clocation_mismatch'],

@@ -175,11 +175,12 @@ class _HboChecks:
         if bad_hhids.empty:
             return []
         bad_mask = df['hhid'].isin(bad_hhids)
-        n = int(bad_hhids.shape[0])
+        n_hh = int(bad_hhids.shape[0])
+        n_rows = int(bad_mask.sum())
         examples = sorted(bad_hhids.tolist())[:5]
         return [_issue(
-            'sleeprooms_inconsistent_across_visits', 'WARNING', 'numsleeprooms', n,
-            f"{n} household(s) have different numsleeprooms values across visits "
+            'sleeprooms_inconsistent_across_visits', 'WARNING', 'numsleeprooms', n_rows,
+            f"{n_hh} household(s) have different numsleeprooms values across visits "
             f"(sleep rooms should not change). Examples: {examples}.",
             _clocation(df, bad_mask),
             hhid=self._hhids(df, bad_mask),

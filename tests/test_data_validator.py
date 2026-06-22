@@ -332,3 +332,51 @@ def test_invalid_mosqspecies_in_assay():
     df = _assay(mosqspecies=['99'])
     report = V.validate_pheno_assay(df, _site())
     assert not report[report['check'] == 'invalid_mosqspecies'].empty
+
+
+# ── hbo_household checks ──────────────────────────────────────────────────────
+
+def _household(**overrides) -> pd.DataFrame:
+    base = {
+        'uniqueid': ['uid1'],
+        'session_id': ['sess1'],
+        'mrccode': ['47'],
+        'hhid': ['347010021'],
+        'dateofobservation': ['2026-04-30'],
+        'numsleeprooms': ['2'],
+        'numsleepareas': ['2'],
+        'numhangbednets': ['1'],
+        'numpeople': ['4'],
+    }
+    base.update(overrides)
+    n = max((len(v) for v in base.values() if isinstance(v, list)), default=1)
+    expanded = {k: (v if isinstance(v, list) else [v]) for k, v in base.items()}
+    expanded = {k: (v * n if len(v) == 1 and n > 1 else v) for k, v in expanded.items()}
+    return pd.DataFrame(expanded)
+
+
+def test_low_device_record_count_equals_number_of_devices():
+    """record_count should equal the number of low-count devices, matching the detail string."""
+    df = _collection(
+        uniqueid=['uid1', 'uid2', 'uid3'],
+        session_id=['sess1', 'sess2', 'sess3'],
+        _source_db=['device_A', 'device_A', 'device_B'],  # device_A: 2 records, device_B: 1 record
+    )
+    report = V.validate_collection(df, _mosquito(n=0))
+    row = report[report['check'] == 'low_device_record_count']
+    assert len(row) == 1
+    assert row.iloc[0]['record_count'] == 2  # 2 devices, not 3 records
+
+
+def test_sleeprooms_inconsistent_record_count_equals_affected_rows():
+    """record_count should be the number of session rows flagged, not the number of households."""
+    hh = _household(
+        uniqueid=['uid1', 'uid2', 'uid3', 'uid4'],
+        session_id=['sess1', 'sess2', 'sess3', 'sess4'],
+        dateofobservation=['2026-04-30', '2026-05-01', '2026-06-01', '2026-06-02'],
+        numsleeprooms=['2', '2', '3', '3'],  # changes from 2 to 3 → 1 household, 4 rows
+    )
+    report = V.validate_hbo_household(hh)
+    row = report[report['check'] == 'sleeprooms_inconsistent_across_visits']
+    assert len(row) == 1
+    assert row.iloc[0]['record_count'] == 4  # 4 session rows, not 1 household

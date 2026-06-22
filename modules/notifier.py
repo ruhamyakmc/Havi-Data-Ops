@@ -364,6 +364,21 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
                 display = [c for c in display if c in flagged.columns]
                 _write_df(ws, flagged[display], start_row=2, fill=warn_fill)
 
+    # --- Fallback: one sheet per check that has no dedicated handler above ---
+    dedicated = {
+        'count_mismatch', 'duplicate_hhid_per_date', 'person_count_vs_numpeople',
+        'sleepareas_less_than_sleeprooms', 'mosquito_clocation_mismatch', 'obs_transition_net_out_net',
+    }
+    for check in sorted(checks_present):
+        if check in dedicated:
+            continue
+        sheet_name = check[:31]
+        ws = wb.create_sheet(sheet_name)
+        ws.cell(1, 1, check).font = bold_font
+        check_df = report_df[report_df['check'] == check][display_cols]
+        if not check_df.empty:
+            _write_df(ws, check_df, start_row=2)
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

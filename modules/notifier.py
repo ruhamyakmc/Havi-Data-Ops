@@ -14,11 +14,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import pandas as pd
-from cryptography.fernet import Fernet
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Border, Side
 from openpyxl.utils import get_column_letter
 
+from modules.credentials import load_encrypted_value
 from stages.base import StageResult
 
 logger = logging.getLogger(__name__)
@@ -26,23 +26,10 @@ logger = logging.getLogger(__name__)
 
 def _load_smtp_password(ini_path: str, key_path: str) -> str:
     """Read the Fernet-encrypted Password value from an ini-style file."""
-    with open(key_path, 'r') as f:
-        key = f.read().strip().encode()
-    cipher = Fernet(key)
-
-    cfg: dict[str, str] = {}
-    with open(ini_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#') or '=' not in line:
-                continue
-            k, _, v = line.partition('=')
-            cfg[k.strip()] = v.strip()
-
-    if 'Password' not in cfg:
-        raise KeyError("'Password' key not found in SMTP credential file.")
-
-    return cipher.decrypt(cfg['Password'].encode()).decode()
+    try:
+        return load_encrypted_value(ini_path, key_path, 'Password')
+    except KeyError as exc:
+        raise KeyError("'Password' key not found in SMTP credential file.") from exc
 
 
 def _query_validation_report(engine) -> pd.DataFrame | None:

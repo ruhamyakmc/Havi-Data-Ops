@@ -316,8 +316,8 @@ class _CollectionChecks:
         present = work.drop_duplicates(subset=['hhid', date_col]).copy()
         dates = pd.to_datetime(present[date_col], errors='coerce')
         iso = dates.dt.isocalendar()
-        present['iso_year'] = iso['year'].values
-        present['iso_week'] = iso['week'].values
+        present.loc[:, 'iso_year'] = iso['year'].to_numpy()
+        present.loc[:, 'iso_week'] = iso['week'].to_numpy()
         issues = []
 
         for (iso_year, iso_week), week_grp in present.groupby(['iso_year', 'iso_week']):

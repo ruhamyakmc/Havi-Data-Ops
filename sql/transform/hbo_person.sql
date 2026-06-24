@@ -6,15 +6,33 @@
 -- obs_6_7am, obs_7_8am, obs_8_9am, obs_9_10am (post-6am).
 SELECT
     session_id, hhid, dateofobservation, individualnum, age, gender,
-    CASE WHEN dateofobservation <= '2026-05-31' THEN -6 ELSE obs_4_5pm::integer END AS obs_4_5pm,
-    CASE WHEN dateofobservation <= '2026-05-31' THEN -6 ELSE obs_5_6pm::integer END AS obs_5_6pm,
+    CASE
+        WHEN dateofobservation <= '2026-05-31' THEN -6
+        WHEN obs_4_5pm ~ '^-?[0-9]+$' THEN obs_4_5pm::integer
+    END AS obs_4_5pm,
+    CASE
+        WHEN dateofobservation <= '2026-05-31' THEN -6
+        WHEN obs_5_6pm ~ '^-?[0-9]+$' THEN obs_5_6pm::integer
+    END AS obs_5_6pm,
     obs_6_7pm, obs_7_8pm, obs_8_9pm, obs_9_10pm,
     obs_10_11pm, obs_11pm_12am, obs_12_1am, obs_1_2am,
     obs_2_3am, obs_3_4am, obs_4_5am, obs_5_6am,
-    CASE WHEN dateofobservation <= '2026-05-31' THEN -6 ELSE obs_6_7am::integer END AS obs_6_7am,
-    CASE WHEN dateofobservation <= '2026-05-31' THEN -6 ELSE obs_7_8am::integer END AS obs_7_8am,
-    CASE WHEN dateofobservation <= '2026-05-31' THEN -6 ELSE obs_8_9am::integer END AS obs_8_9am,
-    CASE WHEN dateofobservation <= '2026-05-31' THEN -6 ELSE obs_9_10am::integer END AS obs_9_10am,
+    CASE
+        WHEN dateofobservation <= '2026-05-31' THEN -6
+        WHEN obs_6_7am ~ '^-?[0-9]+$' THEN obs_6_7am::integer
+    END AS obs_6_7am,
+    CASE
+        WHEN dateofobservation <= '2026-05-31' THEN -6
+        WHEN obs_7_8am ~ '^-?[0-9]+$' THEN obs_7_8am::integer
+    END AS obs_7_8am,
+    CASE
+        WHEN dateofobservation <= '2026-05-31' THEN -6
+        WHEN obs_8_9am ~ '^-?[0-9]+$' THEN obs_8_9am::integer
+    END AS obs_8_9am,
+    CASE
+        WHEN dateofobservation <= '2026-05-31' THEN -6
+        WHEN obs_9_10am ~ '^-?[0-9]+$' THEN obs_9_10am::integer
+    END AS obs_9_10am,
     uniqueid, swver, survey_id, starttime, stoptime, lastmod,
     run_uuid, file_name, file_path, country, community, extracted_at,
     CASE

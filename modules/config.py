@@ -64,6 +64,12 @@ class ConfigLoader:
         if not isinstance(communities, dict) or not communities:
             nested_missing.append("communities")
         else:
+            if len(communities) > 1:
+                raise ValueError(
+                    "This HAVI ETL build uses a shared Extracted/ directory and supports "
+                    "exactly one community. Configure one community or update "
+                    "get_country_paths() to return isolated per-community paths."
+                )
             for name, community in communities.items():
                 if not isinstance(community, dict):
                     nested_missing.append(f"communities.{name}")

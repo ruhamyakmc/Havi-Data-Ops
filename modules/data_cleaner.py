@@ -11,6 +11,38 @@ logger = logging.getLogger(__name__)
 SYSTEM_SKIP_CODE = -9
 
 
+def _sort_latest(df: pd.DataFrame, preferred_time_col: str) -> pd.DataFrame:
+    """Sort newest first using parsed timestamps, with stable fallbacks."""
+    sort_cols = []
+    ascending = []
+    work = df.copy()
+
+    if preferred_time_col in work.columns:
+        parsed_col = f'_{preferred_time_col}_parsed'
+        work.loc[:, parsed_col] = pd.to_datetime(
+            work[preferred_time_col], errors='coerce', utc=True,
+        )
+        sort_cols.append(parsed_col)
+        ascending.append(False)
+
+    if preferred_time_col != 'extracted_at' and 'extracted_at' in work.columns:
+        work.loc[:, '_extracted_at_parsed'] = pd.to_datetime(
+            work['extracted_at'], errors='coerce', utc=True,
+        )
+        sort_cols.append('_extracted_at_parsed')
+        ascending.append(False)
+
+    for fallback in ('file_name', 'uniqueid'):
+        if fallback in work.columns:
+            sort_cols.append(fallback)
+            ascending.append(False)
+
+    if sort_cols:
+        work = work.sort_values(sort_cols, ascending=ascending, na_position='last')
+    helper_cols = [c for c in work.columns if c.startswith('_') and c.endswith('_parsed')]
+    return work.drop(columns=helper_cols)
+
+
 class DataCleaner:
     def __init__(self, df: pd.DataFrame):
         self.df = df
@@ -52,7 +84,7 @@ class DataCleaner:
             return df
 
         if 'lastmod' in with_key.columns:
-            with_key = with_key.sort_values('lastmod', ascending=False)
+            with_key = _sort_latest(with_key, 'lastmod')
 
         deduped = with_key.drop_duplicates(subset=key_columns, keep='first')
         dropped = len(with_key) - len(deduped)
@@ -81,7 +113,7 @@ class DataCleaner:
 
         # Sort by extracted_at descending so the newest version of each record wins
         if 'extracted_at' in with_uid.columns:
-            with_uid_sorted = with_uid.sort_values('extracted_at', ascending=False)
+            with_uid_sorted = _sort_latest(with_uid, 'extracted_at')
         else:
             with_uid_sorted = with_uid
         deduped = with_uid_sorted.drop_duplicates(subset=['uniqueid'], keep='first')
@@ -120,7 +152,7 @@ class DataCleaner:
             return df
 
         if 'extracted_at' in with_key.columns:
-            with_key = with_key.sort_values('extracted_at', ascending=False)
+            with_key = _sort_latest(with_key, 'extracted_at')
 
         deduped = with_key.drop_duplicates(subset=columns, keep='first')
         logger.info(

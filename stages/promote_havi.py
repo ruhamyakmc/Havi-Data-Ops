@@ -5,8 +5,8 @@ import re
 
 from sqlalchemy import text
 
-from modules.db import create_table_indexes, replace_table_from_select
-from modules.havi_schema import FORM_COLUMNS, gold_columns
+from modules.db import create_table_indexes, quote_identifier
+from modules.havi_schema import FORM_COLUMNS, column_definitions, gold_columns
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -39,59 +39,52 @@ class PromoteHavi(BaseStage):
 
             for table in tables:
                 _validate_table_name(table)
-                new_table = f'_new_{table}'
-                old_table = f'_old_{table}'
                 try:
-                    # Capture views that depend on havi.{table} BEFORE the rename.
-                    # Their definitions reference havi.{table} by name, so after the
-                    # swap completes they will correctly point to the new table.
-                    dep_views = conn.execute(text("""
-                        SELECT
-                            n.nspname   AS schema,
-                            c.relname   AS viewname,
-                            pg_get_viewdef(c.oid, true) AS definition
-                        FROM pg_depend d
-                        JOIN pg_rewrite r  ON r.oid      = d.objid
-                        JOIN pg_class   c  ON c.oid      = r.ev_class
-                        JOIN pg_namespace n ON n.oid     = c.relnamespace
-                        JOIN pg_class   t  ON t.oid      = d.refobjid
-                        JOIN pg_namespace tn ON tn.oid   = t.relnamespace
-                        WHERE d.deptype = 'n'
-                          AND c.relkind = 'v'
-                          AND tn.nspname = 'havi'
-                          AND t.relname  = :table
-                    """), {"table": table}).fetchall()
-
-                    conn.execute(text(f'DROP TABLE IF EXISTS havi."{new_table}"'))
                     if table in FORM_COLUMNS:
-                        replace_table_from_select(
-                            conn,
-                            schema='havi',
-                            table=new_table,
-                            columns=gold_columns(table),
-                            select_sql=f'SELECT * FROM gold_havi."{table}"',
+                        columns = gold_columns(table)
+                        target_exists = conn.execute(text("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = 'havi'
+                                  AND table_name = :table
+                                  AND table_type = 'BASE TABLE'
+                            )
+                        """), {'table': table}).scalar()
+                        quoted_columns = ', '.join(quote_identifier(col) for col in columns)
+                        source_columns = ', '.join(
+                            f'{quote_identifier(col)}' for col in columns
                         )
+                        if not target_exists:
+                            conn.execute(text(
+                                f'CREATE TABLE havi.{quote_identifier(table)} '
+                                f'({column_definitions(columns)})'
+                            ))
+                        conn.execute(text(f'TRUNCATE TABLE havi.{quote_identifier(table)}'))
+                        conn.execute(text(
+                            f'INSERT INTO havi.{quote_identifier(table)} ({quoted_columns}) '
+                            f'SELECT {source_columns} FROM gold_havi.{quote_identifier(table)}'
+                        ))
                     else:
-                        conn.execute(text(
-                            f'CREATE TABLE havi."{new_table}" AS '
-                            f'SELECT * FROM gold_havi."{table}"'
-                        ))
-                    conn.execute(text(
-                        f'ALTER TABLE IF EXISTS havi."{table}" '
-                        f'RENAME TO "{old_table}"'
-                    ))
-                    conn.execute(text(
-                        f'ALTER TABLE havi."{new_table}" RENAME TO "{table}"'
-                    ))
+                        target_exists = conn.execute(text("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = 'havi'
+                                  AND table_name = :table
+                                  AND table_type = 'BASE TABLE'
+                            )
+                        """), {'table': table}).scalar()
+                        if target_exists:
+                            conn.execute(text(f'TRUNCATE TABLE havi.{quote_identifier(table)}'))
+                            conn.execute(text(
+                                f'INSERT INTO havi.{quote_identifier(table)} '
+                                f'SELECT * FROM gold_havi.{quote_identifier(table)}'
+                            ))
+                        else:
+                            conn.execute(text(
+                                f'CREATE TABLE havi.{quote_identifier(table)} AS '
+                                f'SELECT * FROM gold_havi.{quote_identifier(table)}'
+                            ))
                     create_table_indexes(conn, 'havi', table)
-                    conn.execute(text(f'DROP TABLE IF EXISTS havi."{old_table}" CASCADE'))
-
-                    # Recreate any views dropped by CASCADE using the pre-rename definitions.
-                    for view in dep_views:
-                        conn.execute(text(
-                            f'CREATE OR REPLACE VIEW {view.schema}."{view.viewname}" AS {view.definition}'
-                        ))
-                        logger.info(f"  Recreated view: {view.schema}.{view.viewname}")
 
                     logger.info(f"  Promoted: gold_havi.{table} → havi.{table}")
                 except Exception as exc:

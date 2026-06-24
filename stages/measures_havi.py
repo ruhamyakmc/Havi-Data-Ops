@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from modules.data_validator import EntomologyValidator
-from modules.db import has_table
+from modules.db import has_table, quote_identifier
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,9 @@ class MeasuresHavi(BaseStage):
             logger.error(msg)
             errors.append(msg)
 
+        if errors:
+            return StageResult(success=False, rows_written=0, errors=errors)
+
         full_report = (
             pd.concat(all_reports, ignore_index=True)
             if all_reports
@@ -111,33 +114,40 @@ class MeasuresHavi(BaseStage):
         full_report['site'] = full_report['mrccode'].astype(str).map(mrc_sites).fillna('')
         full_report = full_report[['check', 'severity', 'site', 'mrccode', 'field', 'record_count', 'detail', 'hhid', 'session_id', 'clocation']]
 
-        with self.engine.begin() as conn:
-            full_report.to_sql(
-                'ds_validation_report', conn,
-                schema='gold_havi',
-                if_exists='replace',
-                index=False,
-            )
-
-        logger.info(
-            f"Wrote {len(full_report)} validation issue(s) → gold_havi.ds_validation_report."
-        )
-
         sql_files = _load_sql_files(SQL_MEASURES_DIR)
-        if not sql_files:
-            msg = f"No SQL files found in '{SQL_MEASURES_DIR}'."
-            logger.warning(msg)
-        else:
+        try:
             with self.engine.begin() as conn:
+                stage_table = '_stage_ds_validation_report'
+                conn.execute(text(
+                    f'DROP TABLE IF EXISTS gold_havi.{quote_identifier(stage_table)}'
+                ))
+                full_report.to_sql(
+                    stage_table, conn,
+                    schema='gold_havi',
+                    if_exists='replace',
+                    index=False,
+                )
+                conn.execute(text('DROP TABLE IF EXISTS gold_havi.ds_validation_report'))
+                conn.execute(text(
+                    f'ALTER TABLE gold_havi.{quote_identifier(stage_table)} '
+                    'RENAME TO ds_validation_report'
+                ))
+
+                if not sql_files:
+                    msg = f"No SQL files found in '{SQL_MEASURES_DIR}'."
+                    logger.warning(msg)
                 for sql_path in sql_files:
-                    try:
-                        conn.execute(text(sql_path.read_text()))
-                        logger.info(f"Executed: {sql_path.name}")
-                    except Exception as exc:
-                        msg = f"SQL error in '{sql_path.name}': {exc}"
-                        logger.error(msg)
-                        errors.append(msg)
-                        raise
+                    conn.execute(text(sql_path.read_text()))
+                    logger.info(f"Executed: {sql_path.name}")
+        except Exception as exc:
+            msg = f"Measures publish failed; transaction rolled back: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+
+        if not errors:
+            logger.info(
+                f"Wrote {len(full_report)} validation issue(s) → gold_havi.ds_validation_report."
+            )
 
         return StageResult(
             success=len(errors) == 0,

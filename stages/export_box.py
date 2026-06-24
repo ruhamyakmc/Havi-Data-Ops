@@ -4,11 +4,11 @@ import io
 import logging
 import zipfile
 from datetime import date
-from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import text
 
+from modules.box_client import get_box_client
 from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
@@ -21,27 +21,6 @@ GOLD_TABLES = [
     'pheno_assay',
     'pheno_site',
 ]
-
-BOX_CONFIG_PATH = Path('secrets/box_config.json')
-
-
-def _get_box_client():
-    """Return a Box JWT service-account client, or None if credentials are absent."""
-    if not BOX_CONFIG_PATH.exists():
-        logger.warning(
-            "Box credentials not found at '%s' — upload will be skipped. "
-            "Download the config JSON from the Box developer console and place it there.",
-            BOX_CONFIG_PATH,
-        )
-        return None
-    try:
-        from boxsdk import JWTAuth, Client
-        auth = JWTAuth.from_settings_file(str(BOX_CONFIG_PATH))
-        return Client(auth)
-    except Exception as exc:
-        logger.error("Failed to build Box client: %s", exc)
-        return None
-
 
 class ExportBox(BaseStage):
     name = 'export_box'
@@ -107,9 +86,13 @@ class ExportBox(BaseStage):
             logger.warning(msg)
             return StageResult(success=True, rows_written=total_rows)
 
-        client = _get_box_client()
+        client = get_box_client()
         if client is None:
-            return StageResult(success=True, rows_written=total_rows)
+            return StageResult(
+                success=False,
+                rows_written=total_rows,
+                errors=["Box upload configured but credentials/client were unavailable."],
+            )
 
         try:
             zip_buffer.seek(0)

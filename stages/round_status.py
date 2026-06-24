@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_HH = 6
 GAP_THRESHOLD = timedelta(days=2)
+HBO_TOLERANCE = timedelta(days=3)
 OUTPUT_PATH = Path('Output') / 'havi_round_status.xlsx'
 ASPIRATION_MRCCODES = {'64', '66', '70'}
 
@@ -82,4 +83,37 @@ def hlc_round_counts(df: pd.DataFrame, round_start: date, round_end: date) -> di
         'n2_indoor': n2_indoor,
         'n2_outdoor': n2_outdoor,
         'complete': complete,
+    }
+
+
+def hbo_round_counts(df: pd.DataFrame, round_start: date, round_end: date) -> dict:
+    """Return HBO HH count aligned to the given HLC round window (±3 days tolerance).
+
+    df must be pre-filtered to one mrccode.
+    Columns required: hhid, dateofobservation.
+    """
+    if df.empty:
+        return {'hbo_dates': '', 'hbo_hh': 0, 'hbo_complete': False}
+
+    df = df.copy()
+    df.loc[:, '_date'] = pd.to_datetime(df['dateofobservation']).dt.date
+    window = df[
+        (df['_date'] >= round_start - HBO_TOLERANCE)
+        & (df['_date'] <= round_end + HBO_TOLERANCE)
+    ]
+
+    if window.empty:
+        return {'hbo_dates': '', 'hbo_hh': 0, 'hbo_complete': False}
+
+    hbo_hh = int(window['hhid'].nunique())
+    sorted_dates = sorted(window['_date'].unique())
+    if len(sorted_dates) == 1:
+        hbo_dates = str(sorted_dates[0])
+    else:
+        hbo_dates = f"{sorted_dates[0]} / {sorted_dates[-1]}"
+
+    return {
+        'hbo_dates': hbo_dates,
+        'hbo_hh': hbo_hh,
+        'hbo_complete': hbo_hh >= EXPECTED_HH,
     }

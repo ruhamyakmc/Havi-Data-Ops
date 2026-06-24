@@ -1,7 +1,7 @@
 from datetime import date
 import pytest
 import pandas as pd
-from stages.round_status import group_rounds, hlc_round_counts, EXPECTED_HH
+from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH
 
 
 def test_empty_dates_returns_empty():
@@ -103,3 +103,50 @@ def test_hlc_empty_dataframe():
     result = hlc_round_counts(pd.DataFrame(columns=['hhid', 'dateofcollection', 'clocation']), date(2026, 6, 18), date(2026, 6, 19))
     assert result['complete'] is False
     assert result['n1_indoor'] == 0
+
+
+def _hbo_df(dates_per_hh: dict[str, date]) -> pd.DataFrame:
+    return pd.DataFrame([
+        {'hhid': hh, 'dateofobservation': d}
+        for hh, d in dates_per_hh.items()
+    ])
+
+
+def test_hbo_complete_aligned_to_round():
+    round_start, round_end = date(2026, 6, 18), date(2026, 6, 19)
+    hbo = _hbo_df({f'HH{i:03}': date(2026, 6, 18) for i in range(1, 7)})
+    result = hbo_round_counts(hbo, round_start, round_end)
+    assert result['hbo_hh'] == 6
+    assert result['hbo_complete'] is True
+
+
+def test_hbo_incomplete_four_hh():
+    round_start, round_end = date(2026, 6, 18), date(2026, 6, 19)
+    hbo = _hbo_df({f'HH{i:03}': date(2026, 6, 18) for i in range(1, 5)})
+    result = hbo_round_counts(hbo, round_start, round_end)
+    assert result['hbo_hh'] == 4
+    assert result['hbo_complete'] is False
+
+
+def test_hbo_aligned_within_3_days_tolerance():
+    # HBO submitted 3 days after round end — still aligned
+    round_start, round_end = date(2026, 6, 18), date(2026, 6, 19)
+    hbo = _hbo_df({f'HH{i:03}': date(2026, 6, 22) for i in range(1, 7)})
+    result = hbo_round_counts(hbo, round_start, round_end)
+    assert result['hbo_hh'] == 6
+
+
+def test_hbo_outside_tolerance_returns_empty():
+    round_start, round_end = date(2026, 6, 18), date(2026, 6, 19)
+    # HBO 10 days later — should not align to this round
+    hbo = _hbo_df({f'HH{i:03}': date(2026, 6, 29) for i in range(1, 7)})
+    result = hbo_round_counts(hbo, round_start, round_end)
+    assert result['hbo_hh'] == 0
+    assert result['hbo_complete'] is False
+    assert result['hbo_dates'] == ''
+
+
+def test_hbo_empty_dataframe():
+    result = hbo_round_counts(pd.DataFrame(columns=['hhid', 'dateofobservation']), date(2026, 6, 18), date(2026, 6, 19))
+    assert result['hbo_hh'] == 0
+    assert result['hbo_complete'] is False

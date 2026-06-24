@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import logging
 from datetime import date, timedelta
 from pathlib import Path
@@ -117,3 +118,58 @@ def hbo_round_counts(df: pd.DataFrame, round_start: date, round_end: date) -> di
         'hbo_hh': hbo_hh,
         'hbo_complete': hbo_hh >= EXPECTED_HH,
     }
+
+
+_SUMMARY_COLS = [
+    'mrccode', 'site', 'round', 'hlc_dates',
+    'hlc_n1_indoor', 'hlc_n1_outdoor', 'hlc_n2_indoor', 'hlc_n2_outdoor',
+    'hlc_complete', 'hbo_dates', 'hbo_hh', 'hbo_complete',
+]
+_INCOMPLETE_COLS = [
+    'mrccode', 'site', 'round', 'collection_type', 'hhid', 'date', 'clocation', 'status',
+]
+_ASP_COLS = ['mrccode', 'site', 'asp_dates', 'asp_hh']
+
+_HEADER_FILL = PatternFill('solid', fgColor='4F81BD')
+_HEADER_FONT = Font(bold=True, color='FFFFFF')
+_COMPLETE_FILL = PatternFill('solid', fgColor='C6EFCE')
+_INCOMPLETE_FILL = PatternFill('solid', fgColor='FFC7CE')
+
+
+def _write_sheet(ws, cols: list[str], rows: list[dict]) -> None:
+    """Write headers + data rows to a worksheet with basic formatting."""
+    for col_idx, col in enumerate(cols, 1):
+        cell = ws.cell(1, col_idx, col)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(horizontal='center')
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(14, len(col) + 2)
+
+    for row_idx, row in enumerate(rows, 2):
+        for col_idx, col in enumerate(cols, 1):
+            val = row.get(col, '')
+            cell = ws.cell(row_idx, col_idx, val)
+            if col in ('hlc_complete', 'hbo_complete'):
+                cell.fill = _COMPLETE_FILL if val else _INCOMPLETE_FILL
+
+
+def build_round_status_excel(
+    summary_rows: list[dict],
+    incomplete_rows: list[dict],
+    asp_rows: list[dict],
+) -> bytes:
+    """Build a three-sheet Excel workbook and return raw bytes."""
+    wb = Workbook()
+    ws_summary = wb.active
+    ws_summary.title = 'Summary'
+    _write_sheet(ws_summary, _SUMMARY_COLS, summary_rows)
+
+    ws_asp = wb.create_sheet('Aspirations')
+    _write_sheet(ws_asp, _ASP_COLS, asp_rows)
+
+    ws_detail = wb.create_sheet('Incomplete Detail')
+    _write_sheet(ws_detail, _INCOMPLETE_COLS, incomplete_rows)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

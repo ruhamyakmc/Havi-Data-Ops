@@ -1,7 +1,9 @@
 from datetime import date
+import io
 import pytest
 import pandas as pd
-from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH
+from openpyxl import load_workbook
+from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH, build_round_status_excel
 
 
 def test_empty_dates_returns_empty():
@@ -150,3 +152,53 @@ def test_hbo_empty_dataframe():
     result = hbo_round_counts(pd.DataFrame(columns=['hhid', 'dateofobservation']), date(2026, 6, 18), date(2026, 6, 19))
     assert result['hbo_hh'] == 0
     assert result['hbo_complete'] is False
+
+
+def _load_wb(data: bytes):
+    return load_workbook(io.BytesIO(data))
+
+
+def test_excel_has_three_sheets():
+    wb = _load_wb(build_round_status_excel([], [], []))
+    assert wb.sheetnames == ['Summary', 'Aspirations', 'Incomplete Detail']
+
+
+def test_excel_summary_headers():
+    wb = _load_wb(build_round_status_excel([], [], []))
+    ws = wb['Summary']
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    assert 'mrccode' in headers
+    assert 'hlc_complete' in headers
+    assert 'hbo_complete' in headers
+
+
+def test_excel_summary_row_written():
+    row = {
+        'mrccode': '12', 'site': 'Kyatiri', 'round': 1,
+        'hlc_dates': '2026-05-19 / 2026-05-20',
+        'hlc_n1_indoor': 6, 'hlc_n1_outdoor': 6,
+        'hlc_n2_indoor': 6, 'hlc_n2_outdoor': 6,
+        'hlc_complete': True,
+        'hbo_dates': '2026-05-19', 'hbo_hh': 6, 'hbo_complete': True,
+    }
+    wb = _load_wb(build_round_status_excel([row], [], []))
+    ws = wb['Summary']
+    assert ws.max_row == 2  # header + 1 data row
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    mrc_col = headers.index('mrccode') + 1
+    assert ws.cell(2, mrc_col).value == '12'
+
+
+def test_excel_incomplete_detail_headers():
+    wb = _load_wb(build_round_status_excel([], [], []))
+    ws = wb['Incomplete Detail']
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    assert 'status' in headers
+    assert 'clocation' in headers
+
+
+def test_excel_aspiration_row_written():
+    asp = {'mrccode': '64', 'site': 'Busitema', 'asp_dates': '2026-05-22 / 2026-05-23', 'asp_hh': 6}
+    wb = _load_wb(build_round_status_excel([], [], [asp]))
+    ws = wb['Aspirations']
+    assert ws.max_row == 2

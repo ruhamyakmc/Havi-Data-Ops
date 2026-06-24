@@ -2,7 +2,6 @@ from datetime import date
 import io
 import pytest
 import pandas as pd
-from pathlib import Path
 from openpyxl import load_workbook
 from unittest.mock import MagicMock, patch
 from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH, build_round_status_excel, RoundStatusStage
@@ -232,7 +231,7 @@ def _make_stage(collection_rows, hbo_rows, mrc_sites=None):
     return result, mock_excel
 
 
-def test_stage_returns_success_on_empty_data():
+def test_stage_returns_failure_on_empty_collection():
     result, _ = _make_stage([], [])
     assert result.success is False
     assert 'No HLC data' in result.errors[0]

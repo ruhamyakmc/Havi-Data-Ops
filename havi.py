@@ -22,6 +22,7 @@ from stages.base import StageResult
 from stages.bronze_to_silver import BronzeToSilver
 from stages.export_box import ExportBox
 from stages.export_visits import ExportVisits
+from stages.round_status import RoundStatusStage
 from stages.ftp_to_extracted import FtpToExtracted
 from stages.measures_havi import MeasuresHavi
 from stages.promote_havi import PromoteHavi
@@ -49,6 +50,7 @@ STAGE_DEPS = {name: cls.dependencies for name, cls in STAGE_CLASSES.items()}
 MANUAL_STAGE_CLASSES = {
     'export_box': ExportBox,
     'export_visits': ExportVisits,
+    'round_status': RoundStatusStage,
 }
 
 

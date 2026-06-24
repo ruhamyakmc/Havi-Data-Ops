@@ -172,8 +172,9 @@ def build_round_status_excel(
         for row in summary_rows:
             mrc = row['mrccode']
             site_max[mrc] = max(site_max[mrc], row['round'])
-        global_max = max(site_max.values())
-        behind = {mrc for mrc, r in site_max.items() if r < global_max}
+        from statistics import mode
+        expected_round = mode(site_max.values())  # majority round — sites ahead don't skew the baseline
+        behind = {mrc for mrc, r in site_max.items() if r < expected_round}
         if behind:
             mrc_col = _SUMMARY_COLS.index('mrccode') + 1
             complete_cols = {_SUMMARY_COLS.index(c) + 1 for c in ('hlc_complete', 'hbo_complete')}

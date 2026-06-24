@@ -134,6 +134,7 @@ _HEADER_FILL = PatternFill('solid', fgColor='4F81BD')
 _HEADER_FONT = Font(bold=True, color='FFFFFF')
 _COMPLETE_FILL = PatternFill('solid', fgColor='C6EFCE')
 _INCOMPLETE_FILL = PatternFill('solid', fgColor='FFC7CE')
+_BEHIND_FILL = PatternFill('solid', fgColor='FFE699')  # amber — site has fewer rounds than the max
 
 
 def _write_sheet(ws, cols: list[str], rows: list[dict]) -> None:
@@ -163,6 +164,25 @@ def build_round_status_excel(
     ws_summary = wb.active
     ws_summary.title = 'Summary'
     _write_sheet(ws_summary, _SUMMARY_COLS, summary_rows)
+
+    # Highlight rows for sites that have fewer rounds than the global maximum.
+    if summary_rows:
+        from collections import defaultdict
+        site_max: dict[str, int] = defaultdict(int)
+        for row in summary_rows:
+            mrc = row['mrccode']
+            site_max[mrc] = max(site_max[mrc], row['round'])
+        global_max = max(site_max.values())
+        behind = {mrc for mrc, r in site_max.items() if r < global_max}
+        if behind:
+            mrc_col = _SUMMARY_COLS.index('mrccode') + 1
+            complete_cols = {_SUMMARY_COLS.index(c) + 1 for c in ('hlc_complete', 'hbo_complete')}
+            for row_idx in range(2, ws_summary.max_row + 1):
+                if ws_summary.cell(row_idx, mrc_col).value in behind:
+                    for col_idx in range(1, len(_SUMMARY_COLS) + 1):
+                        # Don't overwrite the green/red complete cell fills
+                        if col_idx not in complete_cols:
+                            ws_summary.cell(row_idx, col_idx).fill = _BEHIND_FILL
 
     ws_asp = wb.create_sheet('Aspirations')
     _write_sheet(ws_asp, _ASP_COLS, asp_rows)

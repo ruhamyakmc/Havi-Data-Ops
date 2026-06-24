@@ -2,8 +2,10 @@ from datetime import date
 import io
 import pytest
 import pandas as pd
+from pathlib import Path
 from openpyxl import load_workbook
-from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH, build_round_status_excel
+from unittest.mock import MagicMock, patch
+from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH, build_round_status_excel, RoundStatusStage
 
 
 def test_empty_dates_returns_empty():
@@ -202,3 +204,52 @@ def test_excel_aspiration_row_written():
     wb = _load_wb(build_round_status_excel([], [], [asp]))
     ws = wb['Aspirations']
     assert ws.max_row == 2
+
+
+def _make_stage(collection_rows, hbo_rows, mrc_sites=None):
+    """Build a RoundStatusStage with mocked DB returning given rows."""
+    config = MagicMock()
+    config.get.side_effect = lambda key, default=None: (
+        mrc_sites or {'12': 'Kyatiri', '70': 'Nagongera'}
+    ) if key == 'mrc_sites' else default
+
+    engine = MagicMock()
+
+    collection_df = pd.DataFrame(collection_rows) if collection_rows else pd.DataFrame(
+        columns=['hhid', 'mrccode', 'dateofcollection', 'clocation', 'datasource']
+    )
+    hbo_df = pd.DataFrame(hbo_rows) if hbo_rows else pd.DataFrame(
+        columns=['hhid', 'mrccode', 'dateofobservation']
+    )
+
+    with patch('stages.round_status.pd.read_sql', side_effect=[collection_df, hbo_df]):
+        stage = RoundStatusStage(config=config, engine=engine)
+        with patch('stages.round_status.build_round_status_excel', return_value=b'XLSX') as mock_excel:
+            with patch('stages.round_status.OUTPUT_PATH') as mock_path:
+                mock_path.parent.mkdir = MagicMock()
+                mock_path.write_bytes = MagicMock()
+                result = stage.run()
+    return result, mock_excel
+
+
+def test_stage_returns_success_on_empty_data():
+    result, _ = _make_stage([], [])
+    assert result.success is False
+    assert 'No HLC data' in result.errors[0]
+
+
+def test_stage_writes_output_and_returns_success():
+    n1, n2 = date(2026, 5, 19), date(2026, 5, 20)
+    rows = []
+    for i in range(1, 7):
+        hh = f'337010{i:03}'
+        for d in (n1, n2):
+            rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 1, 'datasource': '1'})
+            rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 2, 'datasource': '1'})
+
+    hbo_rows = [{'hhid': f'337010{i:03}', 'mrccode': '12', 'dateofobservation': n1} for i in range(1, 7)]
+
+    result, mock_excel = _make_stage(rows, hbo_rows)
+    assert result.success is True
+    assert result.rows_written >= 1
+    mock_excel.assert_called_once()

@@ -173,3 +173,130 @@ def build_round_status_excel(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+class RoundStatusStage(BaseStage):
+    name = 'round_status'
+    dependencies: list[str] = []
+
+    def run(self) -> StageResult:
+        mrc_sites: dict[str, str] = self.config.get('mrc_sites') or {}
+
+        # ── Load silver tables ────────────────────────────────────────────
+        try:
+            collection_df = pd.read_sql('SELECT * FROM silver_havi."ento_collection"', self.engine)
+        except Exception as exc:
+            return StageResult(success=False, errors=[f'Failed to read ento_collection: {exc}'])
+
+        try:
+            hbo_df = pd.read_sql('SELECT * FROM silver_havi."hbo_household"', self.engine)
+        except Exception as exc:
+            return StageResult(success=False, errors=[f'Failed to read hbo_household: {exc}'])
+
+        if collection_df.empty:
+            return StageResult(success=False, errors=['No HLC data found in silver schema'])
+
+        # Normalise types
+        collection_df['dateofcollection'] = pd.to_datetime(collection_df['dateofcollection']).dt.date
+        collection_df['datasource'] = collection_df['datasource'].astype(str)
+        collection_df['mrccode'] = collection_df['mrccode'].astype(str)
+        if not hbo_df.empty:
+            hbo_df['dateofobservation'] = pd.to_datetime(hbo_df['dateofobservation']).dt.date
+            hbo_df['mrccode'] = hbo_df['mrccode'].astype(str)
+
+        summary_rows: list[dict] = []
+        incomplete_rows: list[dict] = []
+        asp_rows: list[dict] = []
+
+        for mrccode, site in sorted(mrc_sites.items(), key=lambda x: int(x[0])):
+            site_collection = collection_df[collection_df['mrccode'] == mrccode]
+            site_hbo = hbo_df[hbo_df['mrccode'] == mrccode] if not hbo_df.empty else pd.DataFrame()
+
+            # ── HLC rounds (datasource=1) ────────────────────────────────
+            hlc_df = site_collection[site_collection['datasource'] == '1']
+            hlc_dates = list(hlc_df['dateofcollection'].dropna().unique())
+            hlc_rounds = group_rounds(hlc_dates)
+
+            for round_num, (r_start, r_end) in enumerate(hlc_rounds, 1):
+                counts = hlc_round_counts(hlc_df, r_start, r_end)
+                hbo_counts = hbo_round_counts(site_hbo, r_start, r_end)
+
+                hlc_dates_str = (
+                    f"{r_start} / {r_end}" if r_start != r_end else str(r_start)
+                )
+
+                summary_rows.append({
+                    'mrccode': mrccode,
+                    'site': site,
+                    'round': round_num,
+                    'hlc_dates': hlc_dates_str,
+                    'hlc_n1_indoor': counts['n1_indoor'],
+                    'hlc_n1_outdoor': counts['n1_outdoor'],
+                    'hlc_n2_indoor': counts['n2_indoor'],
+                    'hlc_n2_outdoor': counts['n2_outdoor'],
+                    'hlc_complete': counts['complete'],
+                    'hbo_dates': hbo_counts['hbo_dates'],
+                    'hbo_hh': hbo_counts['hbo_hh'],
+                    'hbo_complete': hbo_counts['hbo_complete'],
+                })
+
+                # ── Incomplete detail rows ────────────────────────────────
+                if not counts['complete']:
+                    for night_label, night_date, n_indoor, n_outdoor in [
+                        ('night 1', counts['n1_date'], counts['n1_indoor'], counts['n1_outdoor']),
+                        ('night 2', counts['n2_date'], counts['n2_indoor'], counts['n2_outdoor']),
+                    ]:
+                        if night_date is None:
+                            incomplete_rows.append({
+                                'mrccode': mrccode, 'site': site, 'round': round_num,
+                                'collection_type': 'HLC', 'hhid': '', 'date': str(r_end),
+                                'clocation': '', 'status': f'missing {night_label} entirely',
+                            })
+                            continue
+                        if n_indoor < EXPECTED_HH:
+                            incomplete_rows.append({
+                                'mrccode': mrccode, 'site': site, 'round': round_num,
+                                'collection_type': 'HLC', 'hhid': '',
+                                'date': str(night_date), 'clocation': 'indoor',
+                                'status': f'missing {night_label} indoor ({n_indoor}/{EXPECTED_HH} HH)',
+                            })
+                        if n_outdoor < EXPECTED_HH:
+                            incomplete_rows.append({
+                                'mrccode': mrccode, 'site': site, 'round': round_num,
+                                'collection_type': 'HLC', 'hhid': '',
+                                'date': str(night_date), 'clocation': 'outdoor',
+                                'status': f'missing {night_label} outdoor ({n_outdoor}/{EXPECTED_HH} HH)',
+                            })
+
+                if not hbo_counts['hbo_complete']:
+                    incomplete_rows.append({
+                        'mrccode': mrccode, 'site': site, 'round': round_num,
+                        'collection_type': 'HBO', 'hhid': '',
+                        'date': hbo_counts['hbo_dates'], 'clocation': '',
+                        'status': f"HBO incomplete ({hbo_counts['hbo_hh']}/{EXPECTED_HH} HH)",
+                    })
+
+            # ── Aspiration visits (datasource=2) ─────────────────────────
+            if mrccode in ASPIRATION_MRCCODES:
+                asp_df = site_collection[site_collection['datasource'] == '2']
+                if not asp_df.empty:
+                    asp_dates_list = list(asp_df['dateofcollection'].dropna().unique())
+                    for a_start, a_end in group_rounds(asp_dates_list):
+                        asp_hh = int(asp_df[
+                            (asp_df['dateofcollection'] >= a_start)
+                            & (asp_df['dateofcollection'] <= a_end)
+                        ]['hhid'].nunique())
+                        asp_rows.append({
+                            'mrccode': mrccode,
+                            'site': site,
+                            'asp_dates': f"{a_start} / {a_end}" if a_start != a_end else str(a_start),
+                            'asp_hh': asp_hh,
+                        })
+
+        # ── Write Excel ───────────────────────────────────────────────────
+        xlsx_bytes = build_round_status_excel(summary_rows, incomplete_rows, asp_rows)
+        OUTPUT_PATH.parent.mkdir(exist_ok=True)
+        OUTPUT_PATH.write_bytes(xlsx_bytes)
+        logger.info("Round status report written to %s", OUTPUT_PATH)
+
+        return StageResult(success=True, rows_written=len(summary_rows))

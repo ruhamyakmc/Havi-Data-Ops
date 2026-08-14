@@ -32,6 +32,7 @@ class _MosquitoChecks:
         issues += self._required_fields(mosquito_df, _MOSQUITO_REQUIRED)
         issues += self._orphan_records(mosquito_df, collection_df, 'session_id', 'orphan_mosquito')
         issues += self._clocation_vs_parent(mosquito_df, collection_df)
+        issues += self._hhid_vs_parent(mosquito_df, collection_df)
         issues += self._code_validity(mosquito_df, 'chour', set(range(1, 19)), 'invalid_chour', '1-18')
         issues += self._chour_out_of_window(mosquito_df)
         issues += self._code_validity(mosquito_df, 'grossspecies', set(range(1, 10)),
@@ -141,6 +142,65 @@ class _MosquitoChecks:
             issues.append(_issue(
                 'mosquito_clocation_mismatch', 'ERROR', 'clocation', n_mismatch,
                 f"{n_mismatch} mosquito record(s) have a clocation that differs "
+                f"from their parent collection record.",
+                _clocation(mosquito_df, mismatch_mask),
+                hhid=self._hhids(mosquito_df, mismatch_mask),
+                session_id=self._session_ids(mosquito_df, mismatch_mask),
+            ))
+        return issues
+
+    def _hhid_vs_parent(
+        self,
+        mosquito_df: pd.DataFrame,
+        collection_df: pd.DataFrame,
+    ) -> list[dict]:
+        """Check that each mosquito record's hhid matches its parent collection record.
+
+        Catches cases where a session_id was corrected to point at the right
+        collection record but the mosquito row's own hhid field was left stale
+        (hhid is captured directly on the mosquito form, not derived).
+        """
+        if 'session_id' not in mosquito_df.columns or mosquito_df.empty:
+            return []
+        if 'session_id' not in collection_df.columns or 'hhid' not in collection_df.columns:
+            return []
+        if 'hhid' not in mosquito_df.columns:
+            return []
+
+        parent_hhid = (
+            collection_df[['session_id', 'hhid']]
+            .dropna(subset=['session_id'])
+            .drop_duplicates(subset=['session_id'])
+            .set_index('session_id')['hhid']
+            .astype(str)
+        )
+
+        merged = mosquito_df[['session_id', 'hhid']].copy()
+        merged.loc[:, 'session_id_str'] = merged['session_id'].fillna('').astype(str)
+        merged.loc[:, 'parent_hhid'] = merged['session_id_str'].map(parent_hhid)
+
+        null_mask = merged['hhid'].isna() & merged['parent_hhid'].notna()
+        mismatch_mask = (
+            merged['hhid'].notna()
+            & merged['parent_hhid'].notna()
+            & (merged['hhid'].astype(str) != merged['parent_hhid'])
+        )
+
+        issues = []
+        n_null = int(null_mask.sum())
+        if n_null:
+            issues.append(_issue(
+                'mosquito_hhid_null', 'WARNING', 'hhid', n_null,
+                f"{n_null} mosquito record(s) have no hhid — "
+                f"household cannot be determined.",
+                hhid=self._hhids(mosquito_df, null_mask),
+                session_id=self._session_ids(mosquito_df, null_mask),
+            ))
+        n_mismatch = int(mismatch_mask.sum())
+        if n_mismatch:
+            issues.append(_issue(
+                'mosquito_hhid_mismatch', 'ERROR', 'hhid', n_mismatch,
+                f"{n_mismatch} mosquito record(s) have an hhid that differs "
                 f"from their parent collection record.",
                 _clocation(mosquito_df, mismatch_mask),
                 hhid=self._hhids(mosquito_df, mismatch_mask),

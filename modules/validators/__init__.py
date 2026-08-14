@@ -21,59 +21,61 @@ ento_collection (16 checks):
  15. Device record count <= 2
  16. Sparse columns (>50% null)
 
-ento_mosquito (10 checks):
+ento_mosquito (11 checks):
  17. Required fields non-null
  18. Orphan record (session_id not in ento_collection)
  19. clocation mismatch vs parent collection
- 20. chour codes (1-18)
- 21. grossspecies codes (1-9)
- 22. abdstatus codes (0-3)
- 23. Barcode format (H26-{sitecode}-{4digits})
- 24. Barcode uniqueness
- 25. Duplicate uniqueid
- 26. Duration impossible
+ 20. hhid mismatch vs parent collection
+ 21. chour codes (1-18)
+ 22. grossspecies codes (1-9)
+ 23. abdstatus codes (0-3)
+ 24. Barcode format (H26-{sitecode}-{4digits})
+ 25. Barcode uniqueness
+ 26. Duplicate uniqueid
+ 27. Duration impossible
 
 pheno_assay (7 checks):
- 27. Required fields non-null
- 28. numdead <= numtested
- 29. numkd <= numtested
- 30. pctmortality / pctkd consistency (within 0.1%)
- 31. mosqspecies codes (1-9)
- 32. Orphan assay (site_id not in pheno_site)
- 33. Duplicate uniqueid
+ 28. Required fields non-null
+ 29. numdead <= numtested
+ 30. numkd <= numtested
+ 31. pctmortality / pctkd consistency (within 0.1%)
+ 32. mosqspecies codes (1-9)
+ 33. Orphan assay (site_id not in pheno_site)
+ 34. Duplicate uniqueid
 
 hbo_household (13 checks):
- 34. Required fields non-null
- 35. mrccode validity
- 36. hhid exactly 9 numeric digits
- 37. hhid unique per dateofobservation
- 38. dateofobservation not future
- 39. dateofobservation not before study start
- 40. numsleeprooms integer 0–20
- 41. numsleepareas integer 0–20, >= numsleeprooms
- 42. numsleeprooms inconsistent across visits
- 43. numhangbednets integer 0–20
- 44. numpeople integer 1–15
- 45. Duplicate uniqueid
- 46. Sparse columns
+ 35. Required fields non-null
+ 36. mrccode validity
+ 37. hhid exactly 9 numeric digits
+ 38. hhid unique per dateofobservation
+ 39. dateofobservation not future
+ 40. dateofobservation not before study start
+ 41. numsleeprooms integer 0–20
+ 42. numsleepareas integer 0–20
+ 43. numsleeprooms inconsistent across visits
+ 44. numhangbednets integer 0–20
+ 45. numpeople integer 1–15
+ 46. Duplicate uniqueid
+ 47. Sparse columns
 
 hbo_person (12 checks):
- 47. Required fields non-null
- 48. age numeric 0–120 (null allowed)
- 49. gender codes (1=Male, 2=Female)
- 50. individualnum sequential per session (no gaps/duplicates)
- 51. obs_* codes valid (1–5 or null)
- 52. Missing observation hours (non-trailing null)
- 53. Away entire night (all obs = 5)
- 54. Asleep entire night (all obs = 3)
- 55. Transition: Under net IN → Near OUT → Under net IN
- 56. Infant (age < 1) Away OUT during late night
- 57. Orphan person (session_id not in hbo_household)
- 58. Duplicate uniqueid
+ 48. Required fields non-null
+ 49. age numeric 0–120 (null allowed)
+ 50. gender codes (1=Male, 2=Female)
+ 51. individualnum sequential per session (no gaps/duplicates)
+ 52. obs_* codes valid (1–5 or null)
+ 53. Missing observation hours (non-trailing null)
+ 54. Away entire night (all obs = 5)
+ 55. Asleep entire night (all obs = 3)
+ 56. Transition: Under net IN → Near OUT → Under net IN
+ 57. Infant (age < 1) Away OUT during late night
+ 58. Orphan person (session_id not in hbo_household) — run globally via
+     validate_hbo_person_orphans(), not per-site (see that method's docstring)
+ 59. Duplicate uniqueid
 
 cross-form hbo (2 checks):
- 59. Person count != numpeople
- 60. numhangbednets=0 but obs=1 (Under net IN)
+ 60. Person count != numpeople
+ 61. numhangbednets=0 but obs=1 (Under net IN)
 """
 
 from ._base import _ValidatorBase

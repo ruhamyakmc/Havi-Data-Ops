@@ -200,6 +200,31 @@ def test_orphan_mosquito_record():
     assert not report[report['check'] == 'orphan_mosquito'].empty
 
 
+def test_mosquito_hhid_matches_parent_no_issue():
+    mosq = _mosquito(n=1)
+    mosq['hhid'] = '312010595'  # matches _collection() default hhid
+    report = V.validate_mosquito(mosq, _collection())
+    assert report[report['check'] == 'mosquito_hhid_mismatch'].empty
+
+
+def test_mosquito_hhid_mismatch_vs_parent():
+    """Reproduces the Kigandalo bug: session_id is correctly linked but the
+    mosquito row's own hhid field is stale relative to the parent collection record."""
+    mosq = _mosquito(n=1)
+    mosq['hhid'] = '362030155'
+    report = V.validate_mosquito(mosq, _collection(hhid=['362030228']))
+    issues = report[report['check'] == 'mosquito_hhid_mismatch']
+    assert not issues.empty
+    assert issues.iloc[0]['severity'] == 'ERROR'
+
+
+def test_mosquito_hhid_null_when_parent_has_hhid():
+    mosq = _mosquito(n=1)
+    mosq['hhid'] = None
+    report = V.validate_mosquito(mosq, _collection())
+    assert not report[report['check'] == 'mosquito_hhid_null'].empty
+
+
 def test_invalid_chour():
     mosq = _mosquito(n=1)
     mosq['chour'] = '99'
@@ -264,6 +289,14 @@ def test_barcode_format_invalid():
     mosq['mosq_barcode'] = 'BADBARCODE'
     report = V.validate_mosquito(mosq, _collection())
     assert not report[report['check'] == 'invalid_barcode_format'].empty
+
+
+def test_barcode_format_buz_correction_is_valid():
+    """BUZ barcodes assigned via record_corrections (e.g. H26-NK1-BUZ001) must pass format check."""
+    mosq = _mosquito(n=1)
+    mosq['mosq_barcode'] = 'H26-NK1-BUZ001'
+    report = V.validate_mosquito(mosq, _collection())
+    assert report[report['check'] == 'invalid_barcode_format'].empty
 
 
 def test_duplicate_barcode():
@@ -380,3 +413,48 @@ def test_sleeprooms_inconsistent_record_count_equals_affected_rows():
     row = report[report['check'] == 'sleeprooms_inconsistent_across_visits']
     assert len(row) == 1
     assert row.iloc[0]['record_count'] == 4  # 4 session rows, not 1 household
+
+
+def test_sleepareas_less_than_sleeprooms_is_allowed():
+    hh = _household(numsleeprooms=['9'], numsleepareas=['4'])
+    report = V.validate_hbo_household(hh)
+    assert report[report['check'] == 'sleepareas_less_than_sleeprooms'].empty
+
+
+# ── hbo_person checks ────────────────────────────────────────────────────────
+
+def _person(**overrides) -> pd.DataFrame:
+    base = {
+        'uniqueid': ['puid1'],
+        'session_id': ['sess1'],
+        'individualnum': ['1'],
+    }
+    base.update(overrides)
+    n = max((len(v) for v in base.values() if isinstance(v, list)), default=1)
+    expanded = {k: (v if isinstance(v, list) else [v]) for k, v in base.items()}
+    expanded = {k: (v * n if len(v) == 1 and n > 1 else v) for k, v in expanded.items()}
+    return pd.DataFrame(expanded)
+
+
+def test_orphan_hbo_person_record():
+    person = _person(session_id=['orphan_sess'])
+    household = _household()  # session_id = sess1
+    report = V.validate_hbo_person_orphans(person, household)
+    assert not report[report['check'] == 'orphan_hbo_person'].empty
+
+
+def test_orphan_hbo_person_no_issue_when_session_matches():
+    person = _person(session_id=['sess1'])
+    household = _household()  # session_id = sess1
+    report = V.validate_hbo_person_orphans(person, household)
+    assert report.empty
+
+
+def test_validate_hbo_person_no_longer_runs_orphan_check_itself():
+    """validate_hbo_person is always called with a per-site pre-filtered person_df
+    (see stages/measures_havi.py), so its own orphan check could never fire —
+    orphan detection must go through validate_hbo_person_orphans() instead."""
+    person = _person(session_id=['orphan_sess'])
+    household = _household()  # session_id = sess1
+    report = V.validate_hbo_person(person, household)
+    assert report[report['check'] == 'orphan_hbo_person'].empty

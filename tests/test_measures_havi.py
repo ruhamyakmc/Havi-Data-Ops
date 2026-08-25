@@ -65,3 +65,59 @@ def test_measures_havi_empty_collection_skips():
                 result = stage.run()
     assert result.success
     assert result.rows_written == 0
+
+
+def test_orphan_hbo_person_detected_despite_per_site_scoping():
+    """Regression: hbo_person has no mrccode of its own, so the per-site loop
+    scopes person records by matching them against that site's household
+    session_ids — which silently discards true orphans before validate_hbo_person
+    ever sees them. orphan_hbo_person must still be caught via the global pass.
+    """
+    engine = MagicMock()
+
+    household_df = pd.DataFrame({
+        'uniqueid': ['huid1'],
+        'session_id': ['312010595-2026-04-20'],
+        'mrccode': ['12'],
+        'hhid': ['312010595'],
+        'dateofobservation': ['2026-04-20'],
+        'numpeople': ['1'],
+    })
+    person_df = pd.DataFrame({
+        'uniqueid': ['puid1', 'puid2'],
+        'session_id': ['312010595-2026-04-20', 'orphan-session-2026-05-28'],
+        'individualnum': ['1', '1'],
+    })
+
+    read_map = {
+        'ento_collection': pd.DataFrame(),
+        'ento_mosquito': pd.DataFrame(),
+        'pheno_site': pd.DataFrame(),
+        'pheno_assay': pd.DataFrame(),
+        'hbo_household': household_df,
+        'hbo_person': person_df,
+    }
+
+    def fake_read_sql(sql, eng):
+        for key, val in read_map.items():
+            if f'"{key}"' in sql:
+                return val
+        return pd.DataFrame()
+
+    captured: dict[str, pd.DataFrame] = {}
+
+    def fake_to_sql(self, name, conn, **kwargs):
+        captured['report'] = self.copy()
+
+    with patch('stages.measures_havi.has_table', return_value=True):
+        with patch('stages.measures_havi.pd.read_sql', side_effect=fake_read_sql):
+            with patch('stages.measures_havi._load_sql_files', return_value=[]):
+                with patch.object(pd.DataFrame, 'to_sql', new=fake_to_sql):
+                    stage = MeasuresHavi(config=_make_config(), engine=engine)
+                    result = stage.run()
+
+    assert result.success
+    report = captured['report']
+    orphan_rows = report[report['check'] == 'orphan_hbo_person']
+    assert len(orphan_rows) == 1
+    assert orphan_rows.iloc[0]['session_id'] == 'orphan-session-2026-05-28'

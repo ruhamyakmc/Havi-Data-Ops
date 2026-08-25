@@ -149,6 +149,28 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
             logger.warning('Validation detail query failed: %s', exc)
             return pd.DataFrame()
 
+    allowed_mrc_codes: set[str] = set()
+    if 'mrccode' in report_df.columns:
+        allowed_mrc_codes = {
+            str(v).strip()
+            for v in report_df['mrccode'].dropna().unique()
+            if str(v).strip()
+        }
+
+    def _mrc_filter(alias: str) -> str:
+        if not allowed_mrc_codes:
+            return ''
+        quoted = ', '.join("'" + code.replace("'", "''") + "'" for code in sorted(allowed_mrc_codes))
+        return f" AND {alias}.mrccode::text IN ({quoted})"
+
+    def _mrc_filter_or_null(alias: str) -> str:
+        """Like _mrc_filter, but also keeps rows where a LEFT JOIN found no match
+        (alias.mrccode is NULL) instead of silently dropping them."""
+        if not allowed_mrc_codes:
+            return ''
+        quoted = ', '.join("'" + code.replace("'", "''") + "'" for code in sorted(allowed_mrc_codes))
+        return f" AND ({alias}.mrccode IS NULL OR {alias}.mrccode::text IN ({quoted}))"
+
     cloc_label = {'1': 'Outdoor', '2': 'Indoor'}
 
     wb = Workbook()
@@ -168,7 +190,11 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
     if 'count_mismatch' in checks_present:
         ws = wb.create_sheet('count_mismatch')
         ws.cell(1, 1, 'Collection sessions where numfanoph ≠ actual mosquito count').font = bold_font
-        coll = _query('SELECT session_id, mrccode, hhid, dateofcollection, clocation, numfanoph, nummanoph, numculex FROM gold_havi.ento_collection')
+        coll = _query(
+            'SELECT session_id, mrccode, hhid, dateofcollection, clocation, '
+            'numfanoph, nummanoph, numculex FROM gold_havi.ento_collection c '
+            f'WHERE 1=1{_mrc_filter("c")}'
+        )
         mosq_c = _query('SELECT session_id, clocation, COUNT(*) as actual_count FROM gold_havi.ento_mosquito GROUP BY session_id, clocation')
         mm = pd.DataFrame()
         mosq_detail = pd.DataFrame()
@@ -188,7 +214,7 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
             _write_df(ws, out, start_row=2, fill=err_fill)
             mosq_detail = _query(
                 'SELECT session_id, clocation, mosquito_number, chour, grossspecies, abdstatus, mosq_barcode '
-                'FROM gold_havi.ento_mosquito'
+                f'FROM gold_havi.ento_mosquito m WHERE 1=1{_mrc_filter("m")}'
             )
 
         if not mm.empty and not mosq_detail.empty:
@@ -242,7 +268,9 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
                    h.numpeople, h.numsleeprooms, h.numsleepareas, h.numhangbednets,
                    h.starttime, h.lastmod
             FROM gold_havi.hbo_household h
-            WHERE EXISTS (
+            WHERE 1=1
+        """ + _mrc_filter("h") + """
+              AND EXISTS (
                 SELECT 1 FROM gold_havi.hbo_household h2
                 WHERE h2.hhid = h.hhid AND h2.dateofobservation = h.dateofobservation
                   AND h2.uniqueid != h.uniqueid
@@ -266,6 +294,7 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
             FROM gold_havi.hbo_household h
             LEFT JOIN gold_havi.hbo_person p ON p.session_id = h.session_id
             WHERE h.numpeople ~ '^[0-9]+$'
+        """ + _mrc_filter("h") + """
             GROUP BY h.mrccode, h.session_id, h.hhid, h.dateofobservation, h.numpeople
             HAVING h.numpeople::int != COUNT(p.uniqueid)
             ORDER BY h.mrccode, h.session_id
@@ -279,27 +308,6 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
                 'declared_numpeople': 'Declared (numpeople)', 'person_records': 'Actual Records',
                 'discrepancy': 'Discrepancy'}), start_row=2, fill=err_fill)
 
-    if 'sleepareas_less_than_sleeprooms' in checks_present:
-        ws = wb.create_sheet('sleepareas_lt_sleeprooms')
-        ws.cell(1, 1, 'Households where sleeping areas < sleeping rooms').font = bold_font
-        df = _query("""
-            SELECT mrccode, session_id, hhid, dateofobservation,
-                   numsleeprooms, numsleepareas, numhangbednets, numpeople,
-                   starttime, lastmod
-            FROM gold_havi.hbo_household
-            WHERE numsleepareas ~ '^[0-9]+$' AND numsleeprooms ~ '^[0-9]+$'
-              AND numsleepareas::int < numsleeprooms::int
-            ORDER BY mrccode, session_id
-        """)
-        if not df.empty:
-            df['site'] = df['mrccode'].astype(str).map(mrc_sites).fillna('')
-            cols = ['site', 'session_id', 'hhid', 'dateofobservation',
-                    'numsleeprooms', 'numsleepareas', 'numhangbednets', 'numpeople', 'starttime', 'lastmod']
-            _write_df(ws, df[cols].rename(columns={'site': 'Site', 'session_id': 'Session ID',
-                'hhid': 'Household ID', 'dateofobservation': 'Obs Date',
-                'numsleeprooms': 'Sleep Rooms', 'numsleepareas': 'Sleep Areas',
-                'numhangbednets': 'Bed Nets', 'numpeople': 'Num People'}), start_row=2, fill=err_fill)
-
     if 'mosquito_clocation_mismatch' in checks_present:
         ws = wb.create_sheet('mosquito_clocation_mismatch')
         ws.cell(1, 1, 'Mosquito records where clocation differs from parent collection').font = bold_font
@@ -310,6 +318,7 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
             FROM gold_havi.ento_mosquito m
             JOIN gold_havi.ento_collection c ON m.session_id = c.session_id
             WHERE m.clocation IS NOT NULL
+        """ + _mrc_filter("m") + """
               AND m.clocation::text != c.clocation::text
               AND (c.datasource IS NULL OR c.datasource::text != '2')
             ORDER BY m.mrccode, m.session_id
@@ -332,7 +341,13 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
             '10_11pm','11pm_12am','12_1am','1_2am','2_3am','3_4am','4_5am',
             '5_6am','6_7am','7_8am','8_9am','9_10am',
         ]]
-        df = _query('SELECT * FROM gold_havi.hbo_person ORDER BY session_id, individualnum')
+        df = _query(
+            'SELECT p.*, h.mrccode '
+            'FROM gold_havi.hbo_person p '
+            'LEFT JOIN gold_havi.hbo_household h ON h.session_id = p.session_id '
+            f'WHERE 1=1{_mrc_filter_or_null("h")} '
+            'ORDER BY p.session_id, p.individualnum'
+        )
         if not df.empty:
             # Find persons with the IN→OUT→IN transition
             present = [c for c in obs_cols if c in df.columns]
@@ -354,7 +369,7 @@ def _build_validation_details_excel(engine, report_df: pd.DataFrame, mrc_sites: 
     # --- Fallback: one sheet per check that has no dedicated handler above ---
     dedicated = {
         'count_mismatch', 'duplicate_hhid_per_date', 'person_count_vs_numpeople',
-        'sleepareas_less_than_sleeprooms', 'mosquito_clocation_mismatch', 'obs_transition_net_out_net',
+        'mosquito_clocation_mismatch', 'obs_transition_net_out_net',
     }
     for check in sorted(checks_present):
         if check in dedicated:

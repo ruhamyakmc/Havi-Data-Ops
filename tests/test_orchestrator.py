@@ -30,12 +30,16 @@ def test_build_run_list_all():
     ]
 
 def test_build_run_list_single_stage():
-    stages = build_run_list(_STAGE_DEPS, run_all=False, pipeline='transform_havi')
+    stages = build_run_list(_STAGE_DEPS, run_all=False, pipeline=['transform_havi'])
     assert stages == ['transform_havi']
+
+def test_build_run_list_multiple_stages():
+    stages = build_run_list(_STAGE_DEPS, run_all=False, pipeline=['sqlite_to_bronze', 'transform_havi'])
+    assert stages == ['sqlite_to_bronze', 'transform_havi']
 
 def test_build_run_list_unknown_stage_raises():
     with pytest.raises(SystemExit):
-        build_run_list(_STAGE_DEPS, run_all=False, pipeline='nonexistent')
+        build_run_list(_STAGE_DEPS, run_all=False, pipeline=['nonexistent'])
 
 from unittest.mock import MagicMock, patch
 from stages.base import StageResult
@@ -115,6 +119,19 @@ def test_run_pipeline_calls_notifier_on_success():
             run_pipeline(['sqlite_to_bronze'], config, engine)
 
     mock_notify.assert_called_once()
+
+
+def test_run_pipeline_skips_notifier_when_notify_false():
+    """send_pipeline_report is NOT called when notify=False."""
+    config = MagicMock()
+    engine = MagicMock()
+
+    with patch.object(STAGE_CLASSES['sqlite_to_bronze'], 'run',
+                      return_value=StageResult(success=True, rows_written=5)):
+        with patch('havi.send_pipeline_report') as mock_notify:
+            run_pipeline(['sqlite_to_bronze'], config, engine, notify=False)
+
+    mock_notify.assert_not_called()
 
 
 def test_run_pipeline_logs_structured_stage_complete(caplog):

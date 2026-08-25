@@ -13,6 +13,77 @@ from stages.base import BaseStage, StageResult
 
 logger = logging.getLogger(__name__)
 
+
+def build_partial_hhid_report(
+    collection_df: pd.DataFrame,
+    mrc_sites: dict[str, str],
+) -> str:
+    """Return a plain-text report listing HLC households with fewer nights than the
+    site maximum. These are likely households that were excluded mid-study and replaced.
+    """
+    lines: list[str] = []
+    lines.append('HAVI ETL — Partial / Replaced Households')
+    lines.append(f'Generated: {date.today().isoformat()}')
+    lines.append('=' * 72)
+    lines.append('')
+    lines.append('Households that participated in some but not all rounds within the')
+    lines.append('export window. A household with fewer collection nights than the site')
+    lines.append('maximum was excluded mid-study and replaced by another.')
+    lines.append('')
+
+    hlc = collection_df[collection_df['datasource'].astype(str) == '1'] if not collection_df.empty else collection_df
+    found_any = False
+
+    for mrc in sorted(mrc_sites.keys(), key=int):
+        site_df = hlc[hlc['mrccode'].astype(str) == str(mrc)]
+        if site_df.empty:
+            continue
+
+        nights_per_hh = (
+            site_df.groupby('hhid')['dateofcollection']
+            .apply(lambda s: sorted(s.unique().tolist()))
+            .to_dict()
+        )
+        if not nights_per_hh:
+            continue
+
+        max_nights = max(len(v) for v in nights_per_hh.values())
+        partial = {hh: nights for hh, nights in nights_per_hh.items() if len(nights) < max_nights}
+        if not partial:
+            continue
+
+        found_any = True
+        site_name = mrc_sites[mrc]
+        lines.append('-' * 72)
+        lines.append(f'MRC {mrc}  {site_name}')
+        lines.append('-' * 72)
+        lines.append('')
+
+        continuous = sorted(hh for hh in nights_per_hh if hh not in partial)
+        lines.append(f'  Continuous households ({max_nights} nights):')
+        for hh in continuous:
+            lines.append(f'    {hh}')
+        lines.append('')
+
+        lines.append(f'  Partial households (< {max_nights} nights — excluded or replaced):')
+        for hh in sorted(partial):
+            nights = partial[hh]
+            n = len(nights)
+            first, last = nights[0], nights[-1]
+            lines.append(f'    {hh}  —  {n} night(s)  [{first} to {last}]')
+            for night in nights:
+                lines.append(f'      {night}')
+        lines.append('')
+
+    if not found_any:
+        lines.append('No partial households detected — all hhids have the maximum night count.')
+        lines.append('')
+
+    lines.append('=' * 72)
+    lines.append('END OF REPORT')
+    return '\n'.join(lines)
+
+
 def _first_n_sessions(df: pd.DataFrame, date_col: str, n: int) -> pd.Series:
     """Return a boolean mask for rows belonging to the first n distinct nights per hhid."""
     dates = pd.to_datetime(df[date_col], errors='coerce').dt.date
@@ -64,29 +135,55 @@ class ExportVisits(BaseStage):
     name = 'export_visits'
     dependencies: list[str] = []
 
+    def _zip_name(self, n: int) -> str:
+        export_cfg = self.config.get('export') or {}
+        r = export_cfg.get('round')
+        if r is not None:
+            return f'havi_ento_round{r}_{date.today().isoformat()}.zip'
+        return f'havi_visit{n}_export_{date.today().isoformat()}.zip'
+
+    def _transform_mosquito(
+        self, mosquito_df: pd.DataFrame, collection_df: pd.DataFrame, ds: str
+    ) -> pd.DataFrame:
+        """Hook for subclasses to transform the mosquito DataFrame before export."""
+        return mosquito_df
+
+    def _read_silver(self, table: str) -> pd.DataFrame:
+        try:
+            return pd.read_sql(f'SELECT * FROM silver_havi."{table}"', self.engine)
+        except Exception as exc:
+            logger.warning("Could not read silver_havi.%s: %s", table, exc)
+            return pd.DataFrame()
+
     def run(self) -> StageResult:
-        n = int((self.config.get('export') or {}).get('n_collections', 3))
+        export_cfg = self.config.get('export') or {}
+        n = int(export_cfg.get('n_collections', 3))
+        mrccodes: list[str] | None = export_cfg.get('mrccodes') or None
         errors: list[str] = []
         csv_buffers: dict[str, io.StringIO] = {}
         total_rows = 0
 
         # ── Load silver tables ────────────────────────────────────────────
-        def read_silver(table: str) -> pd.DataFrame:
-            try:
-                return pd.read_sql(f'SELECT * FROM silver_havi."{table}"', self.engine)
-            except Exception as exc:
-                logger.warning("Could not read silver_havi.%s: %s", table, exc)
-                return pd.DataFrame()
+        collection_df = self._read_silver('ento_collection')
+        mosquito_df = self._read_silver('ento_mosquito')
+        household_df = self._read_silver('hbo_household')
+        person_df = self._read_silver('hbo_person')
 
-        collection_df = read_silver('ento_collection')
-        mosquito_df = read_silver('ento_mosquito')
-        household_df = read_silver('hbo_household')
-        person_df = read_silver('hbo_person')
+        # ── Apply site filter ─────────────────────────────────────────────
+        if mrccodes:
+            mrccodes_str = [str(m) for m in mrccodes]
+            logger.info("Filtering export to MRC(s): %s", mrccodes_str)
+            if not collection_df.empty and 'mrccode' in collection_df.columns:
+                collection_df = collection_df[collection_df['mrccode'].astype(str).isin(mrccodes_str)]
+            if not household_df.empty and 'mrccode' in household_df.columns:
+                household_df = household_df[household_df['mrccode'].astype(str).isin(mrccodes_str)]
 
         # ── Entomology: first n nights per household, split by datasource ──
         # datasource=1 → HLC (Human Landing Catches): hlc_collection / hlc_mosquito
         # datasource=2 → Indoor Aspirations:          aspirations_collection / aspirations_mosquito
         _DS_LABELS = {'1': 'hlc', '2': 'aspirations'}
+
+        _hlc_for_report: list[pd.DataFrame] = []  # filtered HLC rows used for excluded_households.txt
 
         if not collection_df.empty and 'hhid' in collection_df.columns:
             try:
@@ -110,6 +207,10 @@ class ExportVisits(BaseStage):
                     date_col = 'dateofcollection' if 'dateofcollection' in ds_collection.columns else 'starttime'
                     mask = _first_n_sessions(ds_collection, date_col, n)
                     ds_collection = ds_collection[mask].copy()
+
+                    # Track filtered HLC rows for the excluded-households report
+                    if ds == '1':
+                        _hlc_for_report.append(ds_collection)
 
                     # datasource=1 (HLC): aspirations_method not applicable → -9
                     # datasource=2 (aspirations): clocation not applicable → -9
@@ -136,6 +237,7 @@ class ExportVisits(BaseStage):
                             ds_mosquito['aspirations_method'] = -9
                         elif ds == '2' and 'clocation' in ds_mosquito.columns:
                             ds_mosquito['clocation'] = -9
+                        ds_mosquito = self._transform_mosquito(ds_mosquito, ds_collection, ds)
                         mosq_name = f'{label}_mosquito.csv'
                         buf = io.StringIO()
                         _prep(ds_mosquito).to_csv(buf, index=False)
@@ -187,13 +289,17 @@ class ExportVisits(BaseStage):
             return StageResult(success=len(errors) == 0, rows_written=0, errors=errors)
 
         # ── Build zip ─────────────────────────────────────────────────────
-        today = date.today().isoformat()
-        zip_name = f'havi_visit{n}_export_{today}.zip'
+        zip_name = self._zip_name(n)
         zip_buffer = io.BytesIO()
+
+        mrc_sites: dict[str, str] = self.config.get('mrc_sites') or {}
+        hlc_export_df = pd.concat(_hlc_for_report, ignore_index=True) if _hlc_for_report else pd.DataFrame()
+        partial_report = build_partial_hhid_report(hlc_export_df, mrc_sites)
 
         with zipfile.ZipFile(zip_buffer, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
             for name, buf in csv_buffers.items():
                 zf.writestr(name, buf.getvalue())
+            zf.writestr('excluded_households.txt', partial_report)
 
         zip_size_kb = round(zip_buffer.tell() / 1024, 1)
         logger.info(

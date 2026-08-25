@@ -535,6 +535,73 @@ def test_field_reports_sent_on_send_day(tmp_path):
     assert 'supervisorA@example.com' in all_recipients
 
 
+def test_validation_detail_queries_are_limited_to_cluster_mrcs():
+    report = pd.DataFrame({
+        'severity': ['ERROR', 'ERROR', 'WARNING'],
+        'check': [
+            'count_mismatch',
+            'person_count_vs_numpeople',
+            'obs_transition_net_out_net',
+        ],
+        'site': ['Otwal HCIII - Oyam', 'Otwal HCIII - Oyam', 'Otwal HCIII - Oyam'],
+        'mrccode': ['36', '36', '36'],
+        'field': ['numfanoph', 'numpeople', 'obs_*'],
+        'record_count': [1, 1, 1],
+        'detail': ['count mismatch', 'person mismatch', 'transition'],
+        'hhid': ['336030066', '336030066', '336030066'],
+        'session_id': [
+            '336030066-2026-06-15-1',
+            '336030066-2026-06-15',
+            '336030066-2026-06-15',
+        ],
+        'clocation': ['', '', ''],
+    })
+    queries: list[str] = []
+
+    def fake_read_sql(sql, engine):
+        queries.append(sql)
+        return pd.DataFrame()
+
+    with patch('modules.notifier.pd.read_sql', side_effect=fake_read_sql):
+        _build_validation_details_excel(MagicMock(), report, {'36': 'Otwal HCIII - Oyam'})
+
+    detail_sql = '\n'.join(queries)
+    assert "mrccode::text IN ('36')" in detail_sql
+    assert 'LEFT JOIN gold_havi.hbo_household h ON h.session_id = p.session_id' in detail_sql
+    assert 'p.mrccode' not in detail_sql
+    assert "'40'" not in detail_sql
+
+
+def test_obs_transition_query_keeps_persons_with_no_household_match():
+    """The obs_transition_net_out_net query LEFT JOINs hbo_household so persons with
+    no matching session survive; the mrc-cluster filter must not turn that into an
+    effective INNER JOIN (regression for silently dropped orphaned person records)."""
+    report = pd.DataFrame({
+        'severity': ['WARNING'],
+        'check': ['obs_transition_net_out_net'],
+        'site': ['Otwal HCIII - Oyam'],
+        'mrccode': ['36'],
+        'field': ['obs_*'],
+        'record_count': [1],
+        'detail': ['transition'],
+        'hhid': ['336030066'],
+        'session_id': ['336030066-2026-06-15'],
+        'clocation': [''],
+    })
+    queries: list[str] = []
+
+    def fake_read_sql(sql, engine):
+        queries.append(sql)
+        return pd.DataFrame()
+
+    with patch('modules.notifier.pd.read_sql', side_effect=fake_read_sql):
+        _build_validation_details_excel(MagicMock(), report, {'36': 'Otwal HCIII - Oyam'})
+
+    obs_sql = next(q for q in queries if 'p.individualnum' in q)
+    assert 'h.mrccode IS NULL' in obs_sql
+    assert "IN ('36')" in obs_sql
+
+
 def test_build_validation_details_excel_creates_sheet_for_every_check():
     """Every distinct check in the report must produce its own sheet."""
     report = pd.DataFrame({

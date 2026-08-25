@@ -65,10 +65,26 @@ class _HboChecks:
         issues += self._obs_asleep_entire_night(person_df)
         issues += self._obs_transition_net_out_net(person_df)
         issues += self._obs_infant_away_night(person_df)
-        issues += self._orphan_records(person_df, household_df, 'session_id', 'orphan_hbo_person')
         issues += self._duplicate_uniqueid(person_df)
         issues += self._hbo_person_count_vs_numpeople(person_df, household_df)
         issues += self._hbo_bednet_under_net_logic(person_df, household_df)
+        return self._to_df(issues)
+
+    def validate_hbo_person_orphans(
+        self,
+        person_df: pd.DataFrame,
+        household_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Flag hbo_person records whose session_id has no matching hbo_household
+        record anywhere in the study.
+
+        Must be called with the full, unscoped person/household tables. hbo_person
+        has no mrccode of its own, so callers that pre-filter person_df down to a
+        single site by matching against that site's household session_ids (the
+        only way to attribute a site) will have already discarded exactly the
+        rows this check exists to find — run it once, globally, instead.
+        """
+        issues = self._orphan_records(person_df, household_df, 'session_id', 'orphan_hbo_person')
         return self._to_df(issues)
 
     def _hbo_hhid_format(self, df: pd.DataFrame) -> list[dict]:
@@ -148,19 +164,6 @@ class _HboChecks:
                 session_id=self._session_ids(df, bad_range),
             ))
 
-        if 'numsleeprooms' in df.columns:
-            rooms = pd.to_numeric(df['numsleeprooms'], errors='coerce')
-            both = areas.notna() & rooms.notna()
-            bad_logic = both & (areas < rooms)
-            n = int(bad_logic.sum())
-            if n:
-                issues.append(_issue(
-                    'sleepareas_less_than_sleeprooms', 'ERROR', 'numsleepareas', n,
-                    f"{n} record(s) have numsleepareas < numsleeprooms.",
-                    _clocation(df, bad_logic),
-                    hhid=self._hhids(df, bad_logic),
-                    session_id=self._session_ids(df, bad_logic),
-                ))
         return issues
 
     def _numsleeprooms_inconsistent(self, df: pd.DataFrame) -> list[dict]:

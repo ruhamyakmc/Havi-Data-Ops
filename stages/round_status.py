@@ -47,12 +47,12 @@ def hlc_round_counts(df: pd.DataFrame, round_start: date, round_end: date) -> di
     df must be pre-filtered to one mrccode and datasource=1.
     Columns required: hhid, dateofcollection, clocation.
     """
-    window = df[
-        (pd.to_datetime(df['dateofcollection']).dt.date >= round_start)
-        & (pd.to_datetime(df['dateofcollection']).dt.date <= round_end)
-    ].copy()
-    window.loc[:, '_date'] = pd.to_datetime(window['dateofcollection']).dt.date
-    window.loc[:, 'clocation'] = pd.to_numeric(window['clocation'], errors='coerce')
+    coll_dates = pd.to_datetime(df['dateofcollection']).dt.date
+    window = df[(coll_dates >= round_start) & (coll_dates <= round_end)].copy()
+    window = window.assign(
+        _date=pd.to_datetime(window['dateofcollection']).dt.date,
+        clocation=pd.to_numeric(window['clocation'], errors='coerce'),
+    )
 
     nights = sorted(window['_date'].unique())
     n1_date = nights[0] if len(nights) >= 1 else None
@@ -96,8 +96,7 @@ def hbo_round_counts(df: pd.DataFrame, round_start: date, round_end: date) -> di
     if df.empty:
         return {'hbo_dates': '', 'hbo_hh': 0, 'hbo_complete': False}
 
-    df = df.copy()
-    df.loc[:, '_date'] = pd.to_datetime(df['dateofobservation']).dt.date
+    df = df.assign(_date=pd.to_datetime(df['dateofobservation']).dt.date)
     window = df[
         (df['_date'] >= round_start - HBO_TOLERANCE)
         & (df['_date'] <= round_end + HBO_TOLERANCE)
@@ -118,6 +117,98 @@ def hbo_round_counts(df: pd.DataFrame, round_start: date, round_end: date) -> di
         'hbo_hh': hbo_hh,
         'hbo_complete': hbo_hh >= EXPECTED_HH,
     }
+
+
+def hbo_missing_hh(
+    collection_df: pd.DataFrame,
+    hbo_df: pd.DataFrame,
+    round_start: date,
+    round_end: date,
+) -> list[dict]:
+    """Return hhids that have ento collection in the round but no HBO within tolerance.
+
+    Checks at the per-HH per-round level: an HH with at least one HBO entry
+    anywhere in [round_start - tolerance, round_end + tolerance] is not flagged.
+    """
+    coll_dates = pd.to_datetime(collection_df['dateofcollection']).dt.date
+    window = collection_df[
+        (coll_dates >= round_start) & (coll_dates <= round_end)
+    ].copy()
+    window = window.assign(_date=pd.to_datetime(window['dateofcollection']).dt.date)
+    collection_hhids = set(window['hhid'].unique())
+
+    if hbo_df.empty:
+        return [{'hhid': hh} for hh in sorted(collection_hhids)]
+
+    hbo = hbo_df.assign(_date=pd.to_datetime(hbo_df['dateofobservation']).dt.date)
+    hbo_in_window = hbo[
+        (hbo['_date'] >= round_start - HBO_TOLERANCE)
+        & (hbo['_date'] <= round_end + HBO_TOLERANCE)
+    ]
+    hbo_hhids = set(hbo_in_window['hhid'].unique())
+
+    return [{'hhid': hh} for hh in sorted(collection_hhids - hbo_hhids)]
+
+
+def hbo_wrong_dates(
+    collection_df: pd.DataFrame,
+    hbo_df: pd.DataFrame,
+    round_start: date,
+    round_end: date,
+) -> list[dict]:
+    """Return HBO entries within tolerance of the round but not matching any collection night."""
+    window = collection_df[
+        (pd.to_datetime(collection_df['dateofcollection']).dt.date >= round_start)
+        & (pd.to_datetime(collection_df['dateofcollection']).dt.date <= round_end)
+    ].copy()
+    window = window.assign(_date=pd.to_datetime(window['dateofcollection']).dt.date)
+    collection_nights = set(window['_date'].unique())
+
+    if hbo_df.empty:
+        return []
+
+    hbo = hbo_df.assign(_date=pd.to_datetime(hbo_df['dateofobservation']).dt.date)
+    hbo_in_window = hbo[
+        (hbo['_date'] >= round_start - HBO_TOLERANCE)
+        & (hbo['_date'] <= round_end + HBO_TOLERANCE)
+    ]
+
+    flagged = []
+    for _, row in hbo_in_window.iterrows():
+        if row['_date'] not in collection_nights:
+            flagged.append({'hhid': row['hhid'], 'hbo_date': row['_date']})
+    return flagged
+
+
+def person_count_issues(
+    hbo_hh_df: pd.DataFrame,
+    hbo_person_df: pd.DataFrame,
+) -> list[dict]:
+    """Return sessions where person record count does not match numpeople on the HH form."""
+    if hbo_hh_df.empty:
+        return []
+
+    if hbo_person_df.empty:
+        actual_counts = pd.Series(0, index=hbo_hh_df['session_id'], dtype=int).rename('actual')
+    else:
+        actual_counts = hbo_person_df.groupby('session_id').size().rename('actual')
+
+    issues = []
+    for _, row in hbo_hh_df.iterrows():
+        session_id = row['session_id']
+        try:
+            expected = int(row['numpeople'])
+        except (ValueError, TypeError):
+            continue
+        actual = int(actual_counts.get(session_id, 0))
+        if actual != expected:
+            issues.append({
+                'session_id': session_id,
+                'hhid': row['hhid'],
+                'expected': expected,
+                'actual': actual,
+            })
+    return issues
 
 
 _SUMMARY_COLS = [
@@ -214,6 +305,11 @@ class RoundStatusStage(BaseStage):
         except Exception as exc:
             return StageResult(success=False, errors=[f'Failed to read hbo_household: {exc}'])
 
+        try:
+            person_df = pd.read_sql('SELECT * FROM silver_havi."hbo_person"', self.engine)
+        except Exception as exc:
+            return StageResult(success=False, errors=[f'Failed to read hbo_person: {exc}'])
+
         if collection_df.empty:
             return StageResult(success=False, errors=['No HLC data found in silver schema'])
 
@@ -224,6 +320,14 @@ class RoundStatusStage(BaseStage):
         if not hbo_df.empty:
             hbo_df['dateofobservation'] = pd.to_datetime(hbo_df['dateofobservation']).dt.date
             hbo_df['mrccode'] = hbo_df['mrccode'].astype(str)
+        if not person_df.empty:
+            # hbo_person has no mrccode — derive it from hbo_household via session_id
+            if not hbo_df.empty and 'session_id' in person_df.columns:
+                mrc_map = hbo_df[['session_id', 'mrccode']].drop_duplicates('session_id')
+                person_df = person_df.merge(mrc_map, on='session_id', how='left')
+            if 'mrccode' not in person_df.columns:
+                person_df['mrccode'] = ''
+            person_df['mrccode'] = person_df['mrccode'].fillna('').astype(str)
 
         summary_rows: list[dict] = []
         incomplete_rows: list[dict] = []
@@ -232,6 +336,7 @@ class RoundStatusStage(BaseStage):
         for mrccode, site in sorted(mrc_sites.items(), key=lambda x: int(x[0])):
             site_collection = collection_df[collection_df['mrccode'] == mrccode]
             site_hbo = hbo_df[hbo_df['mrccode'] == mrccode] if not hbo_df.empty else pd.DataFrame()
+            site_person = person_df[person_df['mrccode'] == mrccode] if not person_df.empty else pd.DataFrame()
 
             # ── HLC rounds (datasource=1) ────────────────────────────────
             hlc_df = site_collection[site_collection['datasource'] == '1']
@@ -296,6 +401,35 @@ class RoundStatusStage(BaseStage):
                         'date': hbo_counts['hbo_dates'], 'clocation': '',
                         'status': f"HBO incomplete ({hbo_counts['hbo_hh']}/{EXPECTED_HH} HH)",
                     })
+
+                # Per-HH missing HBO
+                for m in hbo_missing_hh(hlc_df, site_hbo, r_start, r_end):
+                    incomplete_rows.append({
+                        'mrccode': mrccode, 'site': site, 'round': round_num,
+                        'collection_type': 'HBO', 'hhid': m['hhid'],
+                        'date': f"{r_start} / {r_end}", 'clocation': '',
+                        'status': 'HBO missing for this HH',
+                    })
+
+                # Wrong-date HBO
+                for w in hbo_wrong_dates(hlc_df, site_hbo, r_start, r_end):
+                    incomplete_rows.append({
+                        'mrccode': mrccode, 'site': site, 'round': round_num,
+                        'collection_type': 'HBO', 'hhid': w['hhid'],
+                        'date': str(w['hbo_date']), 'clocation': '',
+                        'status': f"wrong date: entered {w['hbo_date']}, expected a collection night in {r_start} / {r_end}",
+                    })
+
+            # Person count issues (across all rounds for this site)
+            site_hbo_hh = site_hbo if not site_hbo.empty else pd.DataFrame(columns=['session_id', 'hhid', 'numpeople'])
+            for p in person_count_issues(site_hbo_hh, site_person):
+                session_date = p['session_id'].split('-', 1)[1] if '-' in p['session_id'] else ''
+                incomplete_rows.append({
+                    'mrccode': mrccode, 'site': site, 'round': '',
+                    'collection_type': 'HBO', 'hhid': p['hhid'],
+                    'date': session_date, 'clocation': '',
+                    'status': f"person count mismatch: {p['actual']} entered, {p['expected']} expected",
+                })
 
             # ── Aspiration visits (datasource=2) ─────────────────────────
             if mrccode in ASPIRATION_MRCCODES:

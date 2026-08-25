@@ -4,7 +4,7 @@ import pytest
 import pandas as pd
 from openpyxl import load_workbook
 from unittest.mock import MagicMock, patch
-from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, EXPECTED_HH, build_round_status_excel, RoundStatusStage
+from stages.round_status import group_rounds, hlc_round_counts, hbo_round_counts, hbo_missing_hh, hbo_wrong_dates, person_count_issues, EXPECTED_HH, build_round_status_excel, RoundStatusStage
 
 
 def test_empty_dates_returns_empty():
@@ -205,7 +205,7 @@ def test_excel_aspiration_row_written():
     assert ws.max_row == 2
 
 
-def _make_stage(collection_rows, hbo_rows, mrc_sites=None):
+def _make_stage(collection_rows, hbo_rows, person_rows=None, mrc_sites=None):
     """Build a RoundStatusStage with mocked DB returning given rows."""
     config = MagicMock()
     config.get.side_effect = lambda key, default=None: (
@@ -218,10 +218,13 @@ def _make_stage(collection_rows, hbo_rows, mrc_sites=None):
         columns=['hhid', 'mrccode', 'dateofcollection', 'clocation', 'datasource']
     )
     hbo_df = pd.DataFrame(hbo_rows) if hbo_rows else pd.DataFrame(
-        columns=['hhid', 'mrccode', 'dateofobservation']
+        columns=['hhid', 'mrccode', 'dateofobservation', 'session_id', 'numpeople']
+    )
+    person_df = pd.DataFrame(person_rows) if person_rows else pd.DataFrame(
+        columns=['hhid', 'mrccode', 'session_id']
     )
 
-    with patch('stages.round_status.pd.read_sql', side_effect=[collection_df, hbo_df]):
+    with patch('stages.round_status.pd.read_sql', side_effect=[collection_df, hbo_df, person_df]):
         stage = RoundStatusStage(config=config, engine=engine)
         with patch('stages.round_status.build_round_status_excel', return_value=b'XLSX') as mock_excel:
             with patch('stages.round_status.OUTPUT_PATH') as mock_path:
@@ -246,9 +249,265 @@ def test_stage_writes_output_and_returns_success():
             rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 1, 'datasource': '1'})
             rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 2, 'datasource': '1'})
 
-    hbo_rows = [{'hhid': f'337010{i:03}', 'mrccode': '12', 'dateofobservation': n1} for i in range(1, 7)]
+    hbo_rows = [
+        {'hhid': f'337010{i:03}', 'mrccode': '12', 'dateofobservation': n1,
+         'session_id': f'337010{i:03}-2026-05-19', 'numpeople': '3'}
+        for i in range(1, 7)
+    ]
+    person_rows = [
+        {'hhid': f'337010{i:03}', 'mrccode': '12', 'session_id': f'337010{i:03}-2026-05-19'}
+        for i in range(1, 7)
+        for _ in range(3)
+    ]
 
-    result, mock_excel = _make_stage(rows, hbo_rows)
+    result, mock_excel = _make_stage(rows, hbo_rows, person_rows)
     assert result.success is True
     assert result.rows_written >= 1
     mock_excel.assert_called_once()
+
+
+# ── Gap 1: per-HH HBO missing detection ──────────────────────────────────────
+
+def _collection_df_for_round(n1: date, n2: date, hhids: list[str]) -> pd.DataFrame:
+    rows = []
+    for hh in hhids:
+        for d in (n1, n2):
+            rows.append({'hhid': hh, 'dateofcollection': d, 'clocation': 1})
+            rows.append({'hhid': hh, 'dateofcollection': d, 'clocation': 2})
+    return pd.DataFrame(rows)
+
+
+def test_hbo_missing_hh_returns_empty_when_all_present():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    hbo = pd.DataFrame([{'hhid': hh, 'dateofobservation': n1} for hh in hhids]
+                       + [{'hhid': hh, 'dateofobservation': n2} for hh in hhids])
+    assert hbo_missing_hh(coll, hbo, n1, n2) == []
+
+
+def test_hbo_missing_hh_flags_hhid_with_no_hbo_in_round():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    # HH006 has no HBO at all
+    hbo = pd.DataFrame([{'hhid': hh, 'dateofobservation': n1} for hh in hhids[:-1]])
+    missing = hbo_missing_hh(coll, hbo, n1, n2)
+    assert any(m['hhid'] == 'HH006' for m in missing)
+
+
+def test_hbo_missing_hh_does_not_flag_hhid_with_partial_hbo():
+    # Per-round check: an HH with HBO on at least one night is not flagged as missing
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    # HH001 has HBO only on n1 — has SOME HBO for the round, not flagged
+    hbo = pd.DataFrame(
+        [{'hhid': hh, 'dateofobservation': n1} for hh in hhids]
+        + [{'hhid': hh, 'dateofobservation': n2} for hh in hhids[1:]]
+    )
+    missing = hbo_missing_hh(coll, hbo, n1, n2)
+    assert not any(m['hhid'] == 'HH001' for m in missing)
+
+
+def test_hbo_missing_hh_tolerates_hbo_date_within_3_days():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    # All HBO submitted 2 days after round end — still within tolerance
+    hbo = pd.DataFrame([{'hhid': hh, 'dateofobservation': date(2026, 6, 21)} for hh in hhids])
+    missing = hbo_missing_hh(coll, hbo, n1, n2)
+    assert missing == []
+
+
+def test_stage_incomplete_rows_include_per_hh_missing_hbo():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    coll_rows = []
+    for i in range(1, 7):
+        hh = f'337010{i:03}'
+        for d in (n1, n2):
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 1, 'datasource': '1'})
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 2, 'datasource': '1'})
+    # HH006 has no HBO
+    hbo_rows = [
+        {'hhid': f'337010{i:03}', 'mrccode': '12', 'dateofobservation': n1,
+         'session_id': f'337010{i:03}-2026-06-18', 'numpeople': '2'}
+        for i in range(1, 6)
+    ]
+    person_rows = [
+        {'hhid': f'337010{i:03}', 'mrccode': '12', 'session_id': f'337010{i:03}-2026-06-18'}
+        for i in range(1, 6) for _ in range(2)
+    ]
+    _, mock_excel = _make_stage(coll_rows, hbo_rows, person_rows, mrc_sites={'12': 'Kyatiri'})
+    _, incomplete_rows, _ = mock_excel.call_args[0]
+    hbo_missing = [r for r in incomplete_rows if '337010006' in r.get('hhid', '') and r.get('collection_type') == 'HBO']
+    assert len(hbo_missing) >= 1
+
+
+# ── Gap 2: wrong-date HBO detection ──────────────────────────────────────────
+
+def test_hbo_wrong_dates_returns_empty_when_dates_match_collection_nights():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    hbo = pd.DataFrame(
+        [{'hhid': hh, 'dateofobservation': n1} for hh in hhids]
+        + [{'hhid': hh, 'dateofobservation': n2} for hh in hhids]
+    )
+    assert hbo_wrong_dates(coll, hbo, n1, n2) == []
+
+
+def test_hbo_wrong_dates_flags_date_within_tolerance_but_not_a_collection_night():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    wrong = date(2026, 6, 20)  # within ±3 tolerance but not a collection night
+    hbo = pd.DataFrame(
+        [{'hhid': 'HH001', 'dateofobservation': wrong}]
+        + [{'hhid': hh, 'dateofobservation': n1} for hh in hhids[1:]]
+    )
+    flagged = hbo_wrong_dates(coll, hbo, n1, n2)
+    assert len(flagged) == 1
+    assert flagged[0]['hhid'] == 'HH001'
+    assert flagged[0]['hbo_date'] == wrong
+
+
+def test_hbo_wrong_dates_does_not_flag_dates_outside_tolerance():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    hhids = [f'HH{i:03}' for i in range(1, 7)]
+    coll = _collection_df_for_round(n1, n2, hhids)
+    # Jun-25 is 6 days after round end — outside tolerance entirely, not counted
+    hbo = pd.DataFrame([{'hhid': hh, 'dateofobservation': date(2026, 6, 25)} for hh in hhids])
+    assert hbo_wrong_dates(coll, hbo, n1, n2) == []
+
+
+def test_stage_incomplete_rows_include_wrong_date_hbo():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    coll_rows = []
+    for i in range(1, 7):
+        hh = f'337010{i:03}'
+        for d in (n1, n2):
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 1, 'datasource': '1'})
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 2, 'datasource': '1'})
+    wrong_date = date(2026, 6, 20)
+    hbo_rows = [
+        {'hhid': '337010001', 'mrccode': '12', 'dateofobservation': wrong_date,
+         'session_id': '337010001-2026-06-20', 'numpeople': '2'},
+        *[
+            {'hhid': f'337010{i:03}', 'mrccode': '12', 'dateofobservation': n1,
+             'session_id': f'337010{i:03}-2026-06-18', 'numpeople': '2'}
+            for i in range(2, 7)
+        ],
+    ]
+    person_rows = [
+        {'hhid': f'337010{i:03}', 'mrccode': '12', 'session_id': f'337010{i:03}-2026-06-18'}
+        for i in range(2, 7) for _ in range(2)
+    ] + [
+        {'hhid': '337010001', 'mrccode': '12', 'session_id': '337010001-2026-06-20'}
+        for _ in range(2)
+    ]
+    _, mock_excel = _make_stage(coll_rows, hbo_rows, person_rows, mrc_sites={'12': 'Kyatiri'})
+    _, incomplete_rows, _ = mock_excel.call_args[0]
+    wrong = [r for r in incomplete_rows if 'wrong date' in r.get('status', '')]
+    assert len(wrong) >= 1
+    assert '337010001' in wrong[0]['hhid']
+
+
+# ── Gap 3: person count mismatch ─────────────────────────────────────────────
+
+def test_person_count_issues_returns_empty_when_counts_match():
+    hbo_hh = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001', 'numpeople': '3'},
+    ])
+    hbo_person = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+    ])
+    assert person_count_issues(hbo_hh, hbo_person) == []
+
+
+def test_person_count_issues_flags_when_actual_less_than_numpeople():
+    hbo_hh = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001', 'numpeople': '4'},
+    ])
+    hbo_person = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+    ])
+    issues = person_count_issues(hbo_hh, hbo_person)
+    assert len(issues) == 1
+    assert issues[0]['session_id'] == 'HH001-2026-06-18'
+    assert issues[0]['expected'] == 4
+    assert issues[0]['actual'] == 2
+
+
+def test_person_count_issues_flags_when_zero_persons_entered():
+    hbo_hh = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-03', 'hhid': 'HH001', 'numpeople': '4'},
+    ])
+    hbo_person = pd.DataFrame(columns=['session_id', 'hhid'])
+    issues = person_count_issues(hbo_hh, hbo_person)
+    assert len(issues) == 1
+    assert issues[0]['actual'] == 0
+    assert issues[0]['expected'] == 4
+
+
+def test_person_count_issues_flags_when_actual_more_than_numpeople():
+    hbo_hh = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001', 'numpeople': '2'},
+    ])
+    hbo_person = pd.DataFrame([
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+        {'session_id': 'HH001-2026-06-18', 'hhid': 'HH001'},
+    ])
+    issues = person_count_issues(hbo_hh, hbo_person)
+    assert len(issues) == 1
+    assert issues[0]['expected'] == 2
+    assert issues[0]['actual'] == 4
+
+
+def test_stage_incomplete_rows_include_person_count_mismatch():
+    n1, n2 = date(2026, 6, 18), date(2026, 6, 19)
+    coll_rows = []
+    for i in range(1, 7):
+        hh = f'337010{i:03}'
+        for d in (n1, n2):
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 1, 'datasource': '1'})
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 2, 'datasource': '1'})
+    hbo_rows = [
+        {'hhid': f'337010{i:03}', 'mrccode': '12', 'dateofobservation': n1,
+         'session_id': f'337010{i:03}-2026-06-18', 'numpeople': '3'}
+        for i in range(1, 7)
+    ]
+    # HH001 only has 1 person instead of 3
+    person_rows = (
+        [{'hhid': '337010001', 'mrccode': '12', 'session_id': '337010001-2026-06-18'}]
+        + [
+            {'hhid': f'337010{i:03}', 'mrccode': '12', 'session_id': f'337010{i:03}-2026-06-18'}
+            for i in range(2, 7) for _ in range(3)
+        ]
+    )
+    _, mock_excel = _make_stage(coll_rows, hbo_rows, person_rows, mrc_sites={'12': 'Kyatiri'})
+    _, incomplete_rows, _ = mock_excel.call_args[0]
+    person_issues = [r for r in incomplete_rows if 'person count' in r.get('status', '')]
+    assert len(person_issues) >= 1
+    assert '337010001' in person_issues[0]['hhid']
+
+
+def test_stage_does_not_crash_when_hbo_empty_but_person_has_rows():
+    """hbo_person has no native mrccode column; if hbo_household is empty the
+    stage must not blow up deriving one (regression for KeyError: 'mrccode')."""
+    n1, n2 = date(2026, 5, 19), date(2026, 5, 20)
+    coll_rows = []
+    for i in range(1, 7):
+        hh = f'337010{i:03}'
+        for d in (n1, n2):
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 1, 'datasource': '1'})
+            coll_rows.append({'hhid': hh, 'mrccode': '12', 'dateofcollection': d, 'clocation': 2, 'datasource': '1'})
+    person_rows = [{'hhid': '337010001', 'session_id': '337010001-2026-05-19'}]
+
+    result, _ = _make_stage(coll_rows, [], person_rows, mrc_sites={'12': 'Kyatiri'})
+    assert result.success is True

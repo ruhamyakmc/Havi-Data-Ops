@@ -7,7 +7,7 @@ import pandas as pd
 _DEFAULT_VALID_MRC_CODES: frozenset[int] = frozenset(
     {12, 23, 25, 29, 31, 36, 37, 40, 42, 47, 56, 59, 62, 64, 66, 69, 70}
 )
-_BARCODE_RE = re.compile(r'^H26-[A-Z0-9]+-\d{4}$')
+_BARCODE_RE = re.compile(r'^H26-[A-Z0-9]+-(\d{4}|BUZ\d+)$')
 
 _CLOCATION_MAP = {1: 'outdoor', 2: 'indoor'}
 

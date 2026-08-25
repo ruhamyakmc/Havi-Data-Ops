@@ -21,6 +21,39 @@ from stages.base import BaseStage, StageResult
 logger = logging.getLogger(__name__)
 
 
+def _renumber_individualnum(df: pd.DataFrame, affected_sessions: set[str]) -> pd.DataFrame:
+    """Reassign individualnum to a contiguous 1..N run per session, for sessions
+    that had one or more hbo_person rows removed by a config exclusion.
+
+    Config-driven `exclusions` (see BronzeToSilver.run) can drop a duplicate-
+    entry batch (e.g. a mis-dated re-submission) without renumbering the
+    survivors, leaving a session's individualnum values starting above 1
+    (e.g. 8-14 instead of 1-7). Preserves the relative order of the survivors'
+    original individualnum values; only touches sessions that actually had a
+    row excluded, so a genuine gap or duplicate elsewhere is left for the
+    validator to flag.
+    """
+    if not affected_sessions or 'session_id' not in df.columns or 'individualnum' not in df.columns:
+        return df
+    mask = df['session_id'].astype(str).isin(affected_sessions)
+    if not mask.any():
+        return df
+    df = df.copy()
+    numeric = pd.to_numeric(df.loc[mask, 'individualnum'], errors='coerce')
+    valid_idx = numeric[numeric.notna()].index
+    if valid_idx.empty:
+        return df
+    new_num = (
+        numeric.loc[valid_idx]
+        .groupby(df.loc[valid_idx, 'session_id'].astype(str))
+        .rank(method='first')
+        .astype(int)
+        .astype(str)
+    )
+    df.loc[valid_idx, 'individualnum'] = new_num
+    return df
+
+
 def _replace_table(conn, schema: str, table: str, df: pd.DataFrame) -> None:
     """Replace a table through a staging table inside the active transaction."""
     stage_table = f'_stage_{table}'
@@ -143,8 +176,14 @@ class BronzeToSilver(BaseStage):
                 # erroneous records (e.g. datasource=2 placeholders with a newer lastmod)
                 # are removed first, allowing the genuine record to survive dedup.
                 exclusions = (self.config.get('exclusions') or {}).get(table, [])
+                excluded_session_ids: set[str] = set()
                 if exclusions and 'uniqueid' in df.columns:
                     excluded_ids = {e['uniqueid'] for e in exclusions if 'uniqueid' in e}
+                    if table == 'hbo_person' and 'session_id' in df.columns:
+                        excluded_session_ids = set(
+                            df.loc[df['uniqueid'].astype(str).isin(excluded_ids), 'session_id']
+                            .dropna().astype(str)
+                        )
                     before = len(df)
                     df = df[~df['uniqueid'].isin(excluded_ids)]
                     dropped = before - len(df)
@@ -167,6 +206,13 @@ class BronzeToSilver(BaseStage):
                             logger.info(
                                 f"[{table}] Filled {n} NULL value(s) in '{col}' → '{default}'."
                             )
+
+                if table == 'hbo_person' and excluded_session_ids:
+                    df = _renumber_individualnum(df, excluded_session_ids)
+                    logger.info(
+                        f"[hbo_person] Renumbered individualnum to 1..N for "
+                        f"{len(excluded_session_ids)} session(s) affected by exclusions."
+                    )
 
                 cleaned_tables[table] = df
 

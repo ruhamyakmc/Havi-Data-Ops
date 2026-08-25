@@ -95,6 +95,15 @@ class MeasuresHavi(BaseStage):
                         report['mrccode'] = mrc
                         all_reports.append(report)
 
+            # hbo_person orphan detection must run once, globally: hbo_person has
+            # no mrccode of its own, and the per-site scoping above (_person_by_mrc)
+            # already discards exactly the unmatched rows this check looks for.
+            if not person_df.empty and not household_df.empty:
+                orphan_report = validator.validate_hbo_person_orphans(person_df, household_df)
+                if not orphan_report.empty:
+                    orphan_report['mrccode'] = ''
+                    all_reports.append(orphan_report)
+
         except Exception as exc:
             msg = f"Validation failed: {exc}"
             logger.error(msg)

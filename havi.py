@@ -21,6 +21,7 @@ from modules.notifier import send_pipeline_report
 from stages.base import StageResult
 from stages.bronze_to_silver import BronzeToSilver
 from stages.export_box import ExportBox
+from stages.export_marvious import ExportMarvious
 from stages.export_visits import ExportVisits
 from stages.round_status import RoundStatusStage
 from stages.ftp_to_extracted import FtpToExtracted
@@ -50,6 +51,7 @@ STAGE_DEPS = {name: cls.dependencies for name, cls in STAGE_CLASSES.items()}
 MANUAL_STAGE_CLASSES = {
     'export_box': ExportBox,
     'export_visits': ExportVisits,
+    'export_marvious': ExportMarvious,
     'round_status': RoundStatusStage,
 }
 
@@ -82,18 +84,21 @@ def build_run_list(
     deps: dict[str, list[str]],
     *,
     run_all: bool,
-    pipeline: str | None = None,
+    pipeline: list[str] | None = None,
 ) -> list[str]:
     if run_all:
         return topological_sort(deps)
     all_known = {**STAGE_CLASSES, **MANUAL_STAGE_CLASSES}
-    if pipeline not in all_known:
-        logger.error(f"Unknown stage '{pipeline}'. Valid stages: {sorted(all_known)}")
-        sys.exit(1)
-    return [pipeline]
+    stages = []
+    for name in (pipeline or []):
+        if name not in all_known:
+            logger.error(f"Unknown stage '{name}'. Valid stages: {sorted(all_known)}")
+            sys.exit(1)
+        stages.append(name)
+    return stages
 
 
-def run_pipeline(stages: list[str], config: ConfigLoader, engine) -> None:
+def run_pipeline(stages: list[str], config: ConfigLoader, engine, *, notify: bool = True) -> None:
     results: dict[str, StageResult] = {}
     failed: set[str] = set()
     run_id = str(uuid.uuid4())
@@ -140,7 +145,8 @@ def run_pipeline(stages: list[str], config: ConfigLoader, engine) -> None:
     _log_summary(results, failed)
     log_pipeline_run(engine, run_id, started_at, results, stages)
     log_pipeline_row_counts(engine, run_id)
-    send_pipeline_report(results=results, stages=stages, engine=engine, config=config)
+    if notify:
+        send_pipeline_report(results=results, stages=stages, engine=engine, config=config)
     if failed:
         sys.exit(1)
 
@@ -172,10 +178,11 @@ def _print_stages() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='HAVI Entomology ETL orchestrator')
-    parser.add_argument('-p', '--pipeline', help='Run a single named stage')
+    parser.add_argument('-p', '--pipeline', nargs='+', help='Run one or more named stages')
     parser.add_argument('-a', '--all', action='store_true', help='Run all stages')
     parser.add_argument('-l', '--list', action='store_true', help='List stages in execution order')
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('--no-notify', action='store_true', help='Skip sending field reports')
     args = parser.parse_args()
 
     if args.list:
@@ -186,7 +193,7 @@ def main() -> None:
         logging.getLogger().setLevel(logging.DEBUG)
 
     if not args.all and not args.pipeline:
-        parser.error('Specify -a (all stages), -p <stage_name>, or -l (list stages)')
+        parser.error('Specify -a (all stages), -p <stage> [<stage> ...], or -l (list stages)')
 
     config = ConfigLoader('config.json')
     engine = create_db_engine(config)
@@ -194,7 +201,7 @@ def main() -> None:
     run_migrations(engine)
 
     stages = build_run_list(STAGE_DEPS, run_all=args.all, pipeline=args.pipeline)
-    run_pipeline(stages, config, engine)
+    run_pipeline(stages, config, engine, notify=not args.no_notify)
 
 
 if __name__ == '__main__':
